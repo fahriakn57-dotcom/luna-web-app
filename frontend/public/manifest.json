@@ -1,0 +1,16 @@
+{
+  "short_name": "Luna",
+  "name": "Luna — Sesli AI Arkadaşın",
+  "icons": [
+    { "src": "favicon.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "favicon.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" },
+    { "src": "apple-touch-icon.png", "type": "image/png", "sizes": "180x180", "purpose": "any" }
+  ],
+  "id": "/app",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0a0812",
+  "background_color": "#0a0812"
+}

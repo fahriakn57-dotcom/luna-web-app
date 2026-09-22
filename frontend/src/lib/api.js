@@ -1,0 +1,568 @@
+import axios from "axios";
+
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+if (!BACKEND_URL) {
+  throw new Error(
+    "REACT_APP_BACKEND_URL is not set. Define it in frontend/.env (see .env.example)."
+  );
+}
+export const API = `${BACKEND_URL}/api`;
+
+const DEVICE_ID_KEY = "luna_device_id";
+const DEVICE_SECRET_KEY = "luna_device_secret";
+
+function uuid() {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+let registering = null;
+
+// Mirrors the mobile app's identity model (frontend/src/api/client.ts in
+// luna-main): a random device_id claimed via /api/auth/register, proven on
+// every later request with the device_secret returned exactly once. This is
+// what lets a "pairing code" from the phone (see pairWithCode below) swap in
+// the SAME device_id/secret here, so the browser starts seeing that
+// account's own chat history and memories instead of a fresh empty one.
+async function registerDevice() {
+  const id = localStorage.getItem(DEVICE_ID_KEY) || uuid();
+  localStorage.setItem(DEVICE_ID_KEY, id);
+  const res = await axios.post(`${API}/auth/register`, null, {
+    headers: { "X-Device-Id": id },
+  });
+  localStorage.setItem(DEVICE_SECRET_KEY, res.data.device_secret);
+  return { id, secret: res.data.device_secret };
+}
+
+async function getCredentials() {
+  const id = localStorage.getItem(DEVICE_ID_KEY);
+  const secret = localStorage.getItem(DEVICE_SECRET_KEY);
+  if (id && secret) return { id, secret };
+  if (!registering) {
+    registering = registerDevice().finally(() => {
+      registering = null;
+    });
+  }
+  return registering;
+}
+
+async function authHeaders() {
+  const { id, secret } = await getCredentials();
+  return { "X-Device-Id": id, "X-Device-Secret": secret };
+}
+
+// Redeems a 5-minute pairing code generated on the phone (Profil → Web'e
+// Bağla) and adopts that device's identity here, replacing whatever
+// anonymous identity this browser had registered on first load.
+export async function pairWithCode(code) {
+  const res = await axios.post(`${API}/pairing/redeem`, { code: (code || "").trim() });
+  localStorage.setItem(DEVICE_ID_KEY, res.data.device_id);
+  localStorage.setItem(DEVICE_SECRET_KEY, res.data.device_secret);
+  markAuthed(); // pairing from an already-logged-in phone counts as a real login here too
+}
+
+export function isPaired() {
+  return Boolean(localStorage.getItem(DEVICE_ID_KEY) && localStorage.getItem(DEVICE_SECRET_KEY));
+}
+
+const AUTHED_KEY = "luna_authed";
+
+// True once this browser has actually been through the account gate
+// (Login/Signup/Google/pairing from an already-authed phone). Deliberately
+// does NOT fall back to "has any device identity" (isPaired() alone) —
+// registerDevice() mints one anonymously the moment ANY API call is made,
+// so that would let a plain anonymous guest session pass as "authed" and
+// skip the gate entirely, which defeats the point of requiring an account
+// before landing in the app.
+export function isAuthed() {
+  return localStorage.getItem(AUTHED_KEY) === "1";
+}
+
+function markAuthed() {
+  localStorage.setItem(AUTHED_KEY, "1");
+}
+
+// Creates a brand-new account: registers this browser as a fresh device
+// (if it isn't one already), then attaches email+password to it so it can
+// be recovered from other devices later via loginWithEmail().
+export async function signupWithEmail(email, password) {
+  await getCredentials(); // ensures a device identity exists first
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/auth/link-email`, { email, password }, { headers });
+  markAuthed();
+  return res.data; // { ok, email, verification_email_sent }
+}
+
+// Logs into an EXISTING account (created via signupWithEmail, here or on
+// another device) — rebinds this browser's device_id to that account,
+// replacing whatever anonymous identity it had.
+export async function loginWithEmail(email, password) {
+  const id = localStorage.getItem(DEVICE_ID_KEY) || uuid();
+  const res = await axios.post(`${API}/auth/recover`, { email, password }, {
+    headers: { "X-Device-Id": id },
+  });
+  localStorage.setItem(DEVICE_ID_KEY, res.data.device_id);
+  localStorage.setItem(DEVICE_SECRET_KEY, res.data.device_secret);
+  markAuthed();
+  return res.data;
+}
+
+// Requests a password-reset email for an existing email+password account.
+// Always resolves the same way regardless of whether the email actually
+// has an account — the backend deliberately never reveals that (see
+// backend/luna/security.py::request_password_reset), so the caller always
+// shows the same "check your inbox" message either way.
+export async function forgotPassword(email, lang = "tr") {
+  const res = await axios.post(`${API}/auth/forgot-password`, { email, lang });
+  return res.data;
+}
+
+// Confirms a forgot-password email link and sets a new password — does NOT
+// log this browser in (no device rebinding here); the user still logs in
+// normally afterward via loginWithEmail() with their new password.
+export async function resetPassword(token, password) {
+  const res = await axios.post(`${API}/auth/reset-password`, { token, password });
+  return res.data;
+}
+
+export async function loginWithGoogle(idToken) {
+  const id = localStorage.getItem(DEVICE_ID_KEY) || uuid();
+  const secret = localStorage.getItem(DEVICE_SECRET_KEY);
+  // X-Device-Secret proves we actually own this device's existing account
+  // before the backend will attach the Google identity to it (an anonymous
+  // guest upgrading to Google sign-in) — without it, device_id alone isn't
+  // enough (device_id isn't a secret), so the backend rejects the merge.
+  // A brand-new device has no secret yet; that's fine, it just creates one.
+  const headers = { "X-Device-Id": id };
+  if (secret) headers["X-Device-Secret"] = secret;
+  const res = await axios.post(`${API}/auth/google`, { id_token: idToken }, { headers });
+  localStorage.setItem(DEVICE_ID_KEY, res.data.device_id);
+  localStorage.setItem(DEVICE_SECRET_KEY, res.data.device_secret);
+  markAuthed();
+  return res.data;
+}
+
+// Skips straight to the anonymous device flow (no email attached yet) —
+// used by "misafir olarak devam et"-style entry points, if any.
+export async function continueAsGuest() {
+  await getCredentials();
+  markAuthed();
+}
+
+// Confirms the link sent by /api/auth/link-email (see security.py::verify_email
+// on the backend) — the landing page at /verify-email calls this with the
+// token from the URL's query string. No device auth needed: the token
+// itself (a 256-bit random value, single-use, 24h TTL) is the credential.
+export async function verifyEmailToken(token) {
+  await axios.post(`${API}/auth/verify-email`, { token });
+}
+
+// Every generated-file kind LunaWorks can produce, keyed the same way the
+// backend's message meta stores them (see media.py's _FILE_KIND_META) —
+// mirrors DOC_KINDS below, plus image which has always used its own
+// image_base64/image_mime pair (predates the others).
+const GENERATED_FILE_META = [
+  { base64Key: "pdf_base64", mimeKey: "pdf_mime", ext: "pdf" },
+  { base64Key: "xlsx_base64", mimeKey: "xlsx_mime", ext: "xlsx" },
+  { base64Key: "docx_base64", mimeKey: "docx_mime", ext: "docx" },
+  { base64Key: "pptx_base64", mimeKey: "pptx_mime", ext: "pptx" },
+  { base64Key: "tableimg_base64", mimeKey: "tableimg_mime", ext: "png" },
+  { base64Key: "chart_base64", mimeKey: "chart_mime", ext: "png" },
+];
+
+function toWebMessage(m) {
+  const meta = m.meta || {};
+  const generated = GENERATED_FILE_META.find((k) => meta[k.base64Key]);
+  return {
+    id: m.id,
+    role: m.sender === "assistant" || m.sender === "xsf" ? "luna" : "user",
+    text: m.content,
+    timestamp: m.created_at,
+    imageUrl: meta.image_base64 ? `data:${meta.image_mime || "image/png"};base64,${meta.image_base64}` : undefined,
+    // A generated PDF/Excel/Word/PPT/table-image/chart message — chat had
+    // no way to open/download these before (only the dedicated
+    // "Ürettiklerim: X" gallery panel could), even though the reply text
+    // ("İşte Word belgen hazır!") implies you can just grab it right there.
+    fileUrl: generated ? `data:${meta[generated.mimeKey]};base64,${meta[generated.base64Key]}` : undefined,
+    // \w is ASCII-only — \p{L}\p{N} (Unicode property escapes) keeps
+    // Turkish letters (ç/ğ/ı/ö/ş/ü) instead of stripping them from the name.
+    fileName: generated ? `${(meta.title || "luna-dosya").replace(/[^\p{L}\p{N}\s-]/gu, "").trim() || "luna-dosya"}.${generated.ext}` : undefined,
+  };
+}
+
+function toWebMemory(m) {
+  return {
+    id: m.id,
+    title: m.title || "",
+    content: m.content,
+    displayContent: m.title ? `${m.title}: ${m.content}` : m.content,
+    category: m.category || m.type || "other",
+    tags: m.tags || [],
+    event_date: (m.created_at || "").slice(0, 10),
+    created_at: m.created_at,
+  };
+}
+
+export async function sendChat({ message, mode, lang, conversationId }) {
+  const headers = await authHeaders();
+  // Language is a per-account profile setting server-side, not per-message —
+  // set it lazily so switching TR/EN in the UI takes effect on the next turn.
+  await axios.post(`${API}/profile`, { language: lang }, { headers }).catch(() => {});
+  const res = await axios.post(
+    `${API}/chat`,
+    { text: message, mode: mode === "work" ? "work" : "friend", conversation_id: conversationId || null },
+    { headers }
+  );
+  return res.data.reply;
+}
+
+// Sohbetler — named conversation threads within a mode (Arkadaş Modu and
+// LunaWorks Modu each have their own separate list), letting someone keep
+// several distinct chats around instead of one single ever-growing thread.
+// See backend/luna/routers/conversations.py.
+export async function fetchConversations(mode) {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/conversations`, { headers, params: { mode: mode === "work" ? "work" : "friend" } });
+  return res.data.conversations || [];
+}
+
+export async function createConversation(mode) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/conversations`, { mode: mode === "work" ? "work" : "friend" }, { headers });
+  return res.data;
+}
+
+export async function deleteConversation(conversationId) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/conversations/${conversationId}`, { headers });
+}
+
+// Sends an image (png/jpg/webp/gif) or document (pdf/txt) to Luna for real
+// vision/document understanding — same backend endpoint
+// (backend/luna/routers/media.py::chat_media) the mobile app already uses,
+// mode-agnostic (works the same in Arkadaş/LunaWorks — anywhere that passes
+// through conversation_engine.handle_turn). `text` is an optional caption/
+// question alongside the file; the backend fills in a sensible default
+// ("bu görsele bak..." / "bu belgeyi özetle...") when omitted.
+export async function sendMedia(file, text, mode) {
+  const headers = await authHeaders();
+  const form = new FormData();
+  form.append("text", text || "");
+  form.append("mode", mode === "work" ? "work" : "friend");
+  form.append("file", file);
+  const res = await axios.post(`${API}/chat/media`, form, { headers });
+  return res.data.reply;
+}
+
+// Same idea as sendMedia, for up to 10 files in ONE turn (web only — the
+// mobile client still uses the single-file /chat/media above, so that route
+// is left untouched; see backend/luna/routers/media.py::chat_media_batch).
+export async function sendMediaBatch(files, text, mode) {
+  const headers = await authHeaders();
+  const form = new FormData();
+  form.append("text", text || "");
+  form.append("mode", mode === "work" ? "work" : "friend");
+  files.forEach((f) => form.append("files", f));
+  const res = await axios.post(`${API}/chat/media-batch`, form, { headers });
+  return res.data.reply;
+}
+
+// Asks Luna to GENERATE a new image from a text prompt (LunaWorks Modu) —
+// distinct from sendMedia above, which sends an EXISTING file for Luna to
+// look at. Backend: routers/media.py::generate_image (Gemini image model).
+export async function generateImage(prompt, mode) {
+  const headers = await authHeaders();
+  const form = new FormData();
+  form.append("prompt", prompt);
+  form.append("mode", mode === "work" ? "work" : "friend");
+  const res = await axios.post(`${API}/media/generate-image`, form, { headers });
+  return {
+    reply: res.data.reply,
+    imageUrl: `data:${res.data.mime_type || "image/png"};base64,${res.data.image_base64}`,
+  };
+}
+
+// LunaWorks Modu's "Ürettiklerim: Görsel" gallery — every image this user
+// has had Luna draw (see generateImage above), newest first.
+export async function fetchGeneratedImages() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/media/generated-images`, { headers });
+  return (res.data.images || []).map((im) => ({
+    id: im.id,
+    prompt: im.prompt || "",
+    imageUrl: `data:${im.mime_type || "image/png"};base64,${im.image_base64}`,
+    createdAt: im.created_at,
+  }));
+}
+
+export async function deleteGeneratedImage(imageId) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/media/generated-images/${imageId}`, { headers });
+}
+
+// Turns whatever raw text the user pastes (a messy list, CSV-ish text, a
+// paragraph of notes) into a real office file — see backend's doc_service.py
+// for the structuring step per format. `kind` is one of DOC_KINDS' keys.
+const DOC_KINDS = {
+  pdf: { genPath: "generate-pdf", listPath: "generated-pdfs", metaKey: "pdf_base64" },
+  excel: { genPath: "generate-excel", listPath: "generated-excels", metaKey: "xlsx_base64" },
+  word: { genPath: "generate-word", listPath: "generated-words", metaKey: "docx_base64" },
+  ppt: { genPath: "generate-ppt", listPath: "generated-ppts", metaKey: "pptx_base64" },
+  table: { genPath: "generate-table-image", listPath: "generated-table-images", metaKey: "tableimg_base64" },
+  chart: { genPath: "generate-chart", listPath: "generated-charts", metaKey: "chart_base64" },
+};
+
+async function generateDoc(kind, rawData, title, mode) {
+  const { genPath, metaKey } = DOC_KINDS[kind];
+  const headers = await authHeaders();
+  const form = new FormData();
+  form.append("raw_data", rawData);
+  form.append("title", title || "");
+  form.append("mode", mode === "work" ? "work" : "friend");
+  const res = await axios.post(`${API}/media/${genPath}`, form, { headers });
+  return {
+    reply: res.data.reply,
+    title: res.data.title,
+    fileUrl: `data:${res.data.mime_type};base64,${res.data[metaKey]}`,
+  };
+}
+
+export const generatePdf = (rawData, title, mode) => generateDoc("pdf", rawData, title, mode);
+export const generateExcel = (rawData, title, mode) => generateDoc("excel", rawData, title, mode);
+export const generateWord = (rawData, title, mode) => generateDoc("word", rawData, title, mode);
+export const generatePpt = (rawData, title, mode) => generateDoc("ppt", rawData, title, mode);
+export const generateTableImage = (rawData, title, mode) => generateDoc("table", rawData, title, mode);
+export const generateChart = (rawData, title, mode) => generateDoc("chart", rawData, title, mode);
+
+async function fetchGeneratedFiles(kind) {
+  const { listPath } = DOC_KINDS[kind];
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/media/${listPath}`, { headers });
+  return (res.data.files || []).map((f) => ({
+    id: f.id,
+    title: f.title || "",
+    fileUrl: `data:${f.mime_type};base64,${f.file_base64}`,
+    createdAt: f.created_at,
+  }));
+}
+
+export const fetchGeneratedPdfs = () => fetchGeneratedFiles("pdf");
+export const fetchGeneratedExcels = () => fetchGeneratedFiles("excel");
+export const fetchGeneratedWords = () => fetchGeneratedFiles("word");
+export const fetchGeneratedPpts = () => fetchGeneratedFiles("ppt");
+export const fetchGeneratedTableImages = () => fetchGeneratedFiles("table");
+export const fetchGeneratedCharts = () => fetchGeneratedFiles("chart");
+
+async function deleteGeneratedFile(kind, id) {
+  const { listPath } = DOC_KINDS[kind];
+  const headers = await authHeaders();
+  await axios.delete(`${API}/media/${listPath}/${id}`, { headers });
+}
+
+export const deleteGeneratedPdf = (id) => deleteGeneratedFile("pdf", id);
+export const deleteGeneratedExcel = (id) => deleteGeneratedFile("excel", id);
+export const deleteGeneratedWord = (id) => deleteGeneratedFile("word", id);
+export const deleteGeneratedPpt = (id) => deleteGeneratedFile("ppt", id);
+export const deleteGeneratedTableImage = (id) => deleteGeneratedFile("table", id);
+export const deleteGeneratedChart = (id) => deleteGeneratedFile("chart", id);
+
+// `mode` scopes this to that mode's own thread (Arkadaş Modu and LunaWorks
+// Modu no longer share one merged conversation) — see backend's
+// conversation_engine.history for how "friend" also reclaims pre-split
+// legacy history.
+export async function fetchMessages(mode, conversationId) {
+  const headers = await authHeaders();
+  const params = conversationId ? { conversation_id: conversationId } : mode ? { mode } : undefined;
+  const res = await axios.get(`${API}/messages`, { headers, params });
+  return (res.data.messages || []).map(toWebMessage);
+}
+
+export async function clearMessages(mode) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/messages`, { headers, params: mode ? { mode } : undefined });
+}
+
+export async function fetchTTS({ text, mode }) {
+  const headers = await authHeaders();
+  const voice = "coral";
+  const res = await axios.post(`${API}/tts`, { text, voice }, { headers });
+  const bytes = atob(res.data.audio_base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const blob = new Blob([arr], { type: "audio/mpeg" });
+  return URL.createObjectURL(blob);
+}
+
+export async function fetchMemories() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/memories`, { headers });
+  return { memories: (res.data.memories || []).map(toWebMemory), categories: res.data.categories || [] };
+}
+
+export async function addMemory({ title, content, category, tags }) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/memories`, { title, content, category, tags }, { headers });
+  return res.data;
+}
+
+export async function editMemory(memoryId, fields) {
+  const headers = await authHeaders();
+  await axios.patch(`${API}/memories/${memoryId}`, fields, { headers });
+}
+
+export async function deleteMemory(_sessionId, memoryId) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/memories/${memoryId}`, { headers });
+}
+
+export async function clearMemories() {
+  const headers = await authHeaders();
+  await axios.post(`${API}/memories/clear`, null, { headers });
+}
+
+// ---- Notlarım ----
+export async function fetchNotes(q) {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/notes`, { headers, params: q ? { q } : {} });
+  return { notes: res.data.notes || [], categories: res.data.categories || [] };
+}
+export async function createNote({ title, content, category }) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/notes`, { title, content, category }, { headers });
+  return res.data;
+}
+export async function editNote(noteId, fields) {
+  const headers = await authHeaders();
+  const res = await axios.patch(`${API}/notes/${noteId}`, fields, { headers });
+  return res.data;
+}
+export async function deleteNote(noteId) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/notes/${noteId}`, { headers });
+}
+
+// ---- Hedeflerim ----
+export async function fetchGoals() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/goals`, { headers });
+  return { goals: res.data.goals || [], categories: res.data.categories || [] };
+}
+export async function createGoal({ title, category, description, deadline }) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/goals`, { title, category, description, deadline }, { headers });
+  return res.data;
+}
+export async function editGoal(goalId, fields) {
+  const headers = await authHeaders();
+  const res = await axios.patch(`${API}/goals/${goalId}`, fields, { headers });
+  return res.data;
+}
+export async function toggleGoal(goalId) {
+  const headers = await authHeaders();
+  const res = await axios.patch(`${API}/goals/${goalId}/toggle`, null, { headers });
+  return res.data;
+}
+export async function deleteGoal(goalId) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/goals/${goalId}`, { headers });
+}
+
+// ---- Alarmlar ----
+export async function fetchReminders() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/reminders`, { headers });
+  return res.data.reminders || [];
+}
+export async function createReminder({ text, due_at, recurrence }) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/reminders`, { text, due_at, recurrence }, { headers });
+  return res.data;
+}
+export async function cancelReminder(reminderId) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/reminders/${reminderId}`, { headers });
+}
+
+// ---- Günlük ----
+export async function fetchJournal() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/journal`, { headers });
+  return { entries: res.data.entries || [], aiSummaries: res.data.ai_summaries || [] };
+}
+export async function createJournalEntry(content) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/journal`, { content }, { headers });
+  return res.data;
+}
+export async function editJournalEntry(entryId, content) {
+  const headers = await authHeaders();
+  const res = await axios.patch(`${API}/journal/${entryId}`, { content }, { headers });
+  return res.data;
+}
+export async function deleteJournalEntry(entryId) {
+  const headers = await authHeaders();
+  await axios.delete(`${API}/journal/${entryId}`, { headers });
+}
+
+// ---- Profil ----
+export async function fetchProfile() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/profile`, { headers });
+  return res.data;
+}
+export async function updateProfile(fields) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/profile`, fields, { headers });
+  return res.data;
+}
+export async function fetchDayInfo(lang) {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/day-info`, { headers, params: { lang } });
+  return res.data;
+}
+export async function fetchUsage() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/usage`, { headers });
+  return res.data;
+}
+
+// ---- Premium / Abonelik ----
+export async function fetchSubscription() {
+  const headers = await authHeaders();
+  const res = await axios.get(`${API}/subscription`, { headers });
+  return res.data;
+}
+export async function selectPlan(plan) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/subscription/select`, { plan }, { headers });
+  return res.data;
+}
+
+// Starts a real iyzico recurring-subscription checkout for a paid plan.
+// Returns { token, checkout_form_content } — checkout_form_content is
+// iyzico's own HTML/script snippet, meant to be injected as-is (see
+// components/CheckoutModal.jsx for how the embedded <script> gets executed,
+// since a plain innerHTML assignment silently drops script tags).
+export async function checkoutSubscription(plan, billing) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/subscription/checkout`, {
+    plan,
+    name: billing.name,
+    surname: billing.surname,
+    email: billing.email,
+    gsm_number: billing.gsmNumber,
+    identity_number: billing.identityNumber,
+    address: billing.address,
+    city: billing.city,
+  }, { headers });
+  return res.data;
+}
+
+export async function cancelSubscription() {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/subscription/cancel`, {}, { headers });
+  return res.data;
+}

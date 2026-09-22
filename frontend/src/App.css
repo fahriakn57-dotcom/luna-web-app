@@ -1,0 +1,164 @@
+.App { min-height: 100vh; }
+
+/* Hand-written glass background (Tailwind's bg-white/[0.02]-style arbitrary
+   opacity utilities were unreliable in this project's production build —
+   this plain CSS class sidesteps that class of bug entirely). */
+.jarvis-glass { background-color: rgba(255,255,255,0.035); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+
+/* Premium CTA button — soft glow, subtle lift + shine sweep on hover. */
+.luna-cta-btn {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(90deg, #6366f1, #d946ef);
+    box-shadow: 0 4px 18px rgba(139,92,246,0.35), inset 0 1px 0 rgba(255,255,255,0.25);
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.luna-cta-btn:hover {
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 8px 26px rgba(192,132,252,0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+.luna-cta-btn:active { transform: translateY(0) scale(0.98); }
+.luna-cta-btn::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%);
+    transform: translateX(-120%);
+    transition: transform 0.7s ease;
+}
+.luna-cta-btn:hover::before { transform: translateX(120%); }
+.luna-cta-btn .luna-cta-arrow { transition: transform 0.25s ease; }
+.luna-cta-btn:hover .luna-cta-arrow { transform: translateX(3px); }
+@media (prefers-reduced-motion: reduce) {
+    .luna-cta-btn, .luna-cta-btn::before, .luna-cta-btn .luna-cta-arrow { transition: none !important; }
+}
+
+/* ============ ORB / MOTION KEYFRAMES ============ */
+@keyframes floaty {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+}
+@keyframes breath {
+    0%, 100% { transform: scale(1); opacity: 0.9; }
+    50% { transform: scale(1.05); opacity: 1; }
+}
+@keyframes spinSlow { to { transform: rotate(360deg); } }
+@keyframes spinRev { to { transform: rotate(-360deg); } }
+@keyframes spinMed { to { transform: rotate(360deg); } }
+@keyframes ripple {
+    0% { transform: scale(0.7); opacity: 0.55; }
+    100% { transform: scale(2.4); opacity: 0; }
+}
+@keyframes orbit {
+    from { transform: rotate(0deg) translateX(var(--orbit-r)) rotate(0deg); }
+    to   { transform: rotate(360deg) translateX(var(--orbit-r)) rotate(-360deg); }
+}
+@keyframes flicker {
+    0%, 100% { opacity: 1; }
+    92% { opacity: 1; } 94% { opacity: 0.5; } 96% { opacity: 1; }
+}
+@keyframes shimmerText {
+    0% { background-position: -200% center; }
+    100% { background-position: 200% center; }
+}
+@keyframes bootbar {
+    0% { width: 0%; }
+    100% { width: 100%; }
+}
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes auroraDrift {
+    0%, 100% { transform: translate(0,0) scale(1); }
+    50% { transform: translate(6%, -4%) scale(1.15); }
+}
+@keyframes eq {
+    0%, 100% { height: 18%; }
+    50% { height: 100%; }
+}
+@keyframes sweep {
+    0% { transform: translateX(-120%); }
+    100% { transform: translateX(120%); }
+}
+@keyframes twinkle {
+    0%, 100% { opacity: 0.15; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.15); }
+}
+
+.animate-floaty { animation: floaty 7s ease-in-out infinite; }
+.animate-breath { animation: breath 4s ease-in-out infinite; }
+.animate-spin-slow { animation: spinSlow 26s linear infinite; }
+.animate-spin-med { animation: spinMed 16s linear infinite; }
+.animate-spin-rev { animation: spinRev 12s linear infinite; }
+.animate-flicker { animation: flicker 6s linear infinite; }
+.animate-twinkle { animation: twinkle 3s ease-in-out infinite; }
+.fade-up { animation: fadeUp 0.5s ease-out both; }
+
+.eq-bar { width: 3px; border-radius: 3px; animation: eq 0.85s ease-in-out infinite; }
+
+/* Orbiting particle dots around the orb */
+.orbit-dot {
+    position: absolute;
+    top: 50%; left: 50%;
+    margin: -2px 0 0 -2px;
+    border-radius: 9999px;
+    animation: orbit linear infinite;
+}
+
+/* Shimmering brand title */
+.shimmer-text {
+    background: linear-gradient(90deg, currentColor 0%, #ffffff 50%, currentColor 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmerText 6s linear infinite;
+}
+
+/* Aurora nebula blobs */
+.aurora {
+    position: fixed;
+    border-radius: 9999px;
+    filter: blur(90px);
+    opacity: 0.5;
+    pointer-events: none;
+    animation: auroraDrift 18s ease-in-out infinite;
+}
+
+/* JARVIS scanline overlay */
+.scanlines::after {
+    content: "";
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(to bottom,
+        rgba(6,182,212,0.045) 0px, rgba(6,182,212,0.045) 1px,
+        transparent 2px, transparent 4px);
+    z-index: 6;
+}
+.hud-grid {
+    background-image:
+        linear-gradient(rgba(6,182,212,0.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(6,182,212,0.055) 1px, transparent 1px);
+    background-size: 52px 52px;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 85%);
+}
+
+.corner-mark::before, .corner-mark::after {
+    content: ""; position: absolute; width: 11px; height: 11px;
+    border-color: rgba(6,182,212,0.75);
+}
+.corner-mark::before { top: -1px; left: -1px; border-top: 2px solid; border-left: 2px solid; }
+.corner-mark::after { bottom: -1px; right: -1px; border-bottom: 2px solid; border-right: 2px solid; }
+
+/* Scanning sweep line for boot / panels */
+.sweep-line {
+    position: absolute; top: 0; bottom: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(6,182,212,0.15), transparent);
+    animation: sweep 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .animate-floaty, .animate-breath, .animate-spin-slow, .animate-spin-med,
+    .animate-spin-rev, .eq-bar, .orbit-dot, .aurora, .shimmer-text, .sweep-line { animation: none !important; }
+}

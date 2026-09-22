@@ -1,0 +1,430 @@
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Mail, ArrowRight, Loader2, Lock, ShieldCheck, Fingerprint, User, ChevronDown, Globe } from "lucide-react";
+import accountGateBg from "@/assets/account-gate.png";
+import { signupWithEmail, loginWithEmail, loginWithGoogle, forgotPassword } from "@/lib/api";
+
+// Google Identity Services Client ID — public by design (Google's own docs:
+// this is not a secret, only server-side ID-token verification is
+// security-sensitive, see backend/luna/security.py::google_login). Read
+// from env so it's never hardcoded; see .env.example.
+const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+
+// Inline SVG, not an image asset — the previous PNG (@/assets/luna-logo.png)
+// got silently swapped by something outside this codebase (a square
+// "LUNA"-branded app icon replaced the original slim crescent moon mark).
+// Drawing it in code means nothing outside AccountGate.jsx can change how
+// this renders. Shape/proportions match the small top-left "LUNA" wordmark
+// logo used across the site — a tall, clean crescent, no circular backdrop.
+const LunaMoonBadge = () => (
+  <svg width="56" height="56" viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="moonGrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stopColor="#e9d5ff" />
+        <stop offset="100%" stopColor="#8b5cf6" />
+      </linearGradient>
+    </defs>
+    <path
+      d="M52 10c-6.2 6.4-10 15.1-10 24.7 0 19.6 15.9 35.5 35.5 35.5 1.7 0 3.4-.12 5-.35C76.7 88.3 63.4 96 48.3 96 24.8 96 5.8 77 5.8 53.5S24.8 11 48.3 11c1.25 0 2.48.06 3.7.18Z"
+      fill="url(#moonGrad)"
+      transform="translate(4 -4) scale(0.72)"
+    />
+    <circle cx="63" cy="12" r="3.2" fill="#e9d5ff" />
+  </svg>
+);
+
+const GoogleIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24">
+    <path fill="#4285F4" d="M23.52 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.47a5.53 5.53 0 0 1-2.4 3.63v3h3.87c2.27-2.09 3.58-5.17 3.58-8.82Z" />
+    <path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.87-3c-1.08.72-2.46 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.27v3.11A12 12 0 0 0 12 24Z" />
+    <path fill="#FBBC05" d="M5.27 14.28A7.2 7.2 0 0 1 4.89 12c0-.79.14-1.56.38-2.28V6.61H1.27A12 12 0 0 0 0 12c0 1.94.46 3.77 1.27 5.39l4-3.11Z" />
+    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.69 1.27 6.61l4 3.11C6.22 6.86 8.87 4.75 12 4.75Z" />
+  </svg>
+);
+
+const TRUST = [
+  { icon: Fingerprint, tr: "Güvenli\nGiriş", en: "Secure\nLogin" },
+  { icon: ShieldCheck, tr: "Verilerin\nSende", en: "Your Data\nStays Yours" },
+  { icon: User, tr: "Her Zaman\nSeninle", en: "Always\nWith You" },
+];
+
+function GoogleButtonSlot({ t, googleAvailable, onGoogleClick, extraClass = "" }) {
+  // A REAL button with our own onClick — not an invisible iframe overlay
+  // forwarded to. The overlay approach (render Google's real button into a
+  // hidden container, position an invisible copy on top of this one) turned
+  // out to be silently unreliable for real users in ways that never showed
+  // up in testing: if the click didn't land exactly on Google's iframe
+  // (layout shift, browser quirk, rendering timing), it just did nothing —
+  // no error, not even hover feedback, and we had no way to tell why.
+  // Calling google.accounts.id.prompt() directly from our own click handler
+  // is simpler and debuggable: its callback tells us exactly why nothing
+  // showed (see onGoogleClick), instead of failing in total silence.
+  return (
+    <button onClick={onGoogleClick} data-testid="gate-google-button" disabled={!googleAvailable}
+      className={`w-full flex items-center justify-center gap-2.5 rounded-full py-3 text-sm font-semibold bg-white text-black hover:bg-white/90 transition-colors disabled:opacity-60 ${extraClass}`}>
+      <GoogleIcon /> {t("Google ile Devam Et", "Continue with Google")} <ArrowRight size={15} />
+    </button>
+  );
+}
+
+function GateCard({ lang, view, setView, email, setEmail, password, setPassword, loading, googleAvailable, onGoogleClick, onSubmit, onOpenForgot, onForgotSubmit, forgotSent }) {
+  const t = (tr, en) => (lang === "tr" ? tr : en);
+
+  return (
+    <>
+      <div className="flex items-center justify-end mb-1">
+        <button className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition-colors">
+          <Globe size={13} /> {lang === "tr" ? "TR" : "EN"} <ChevronDown size={12} />
+        </button>
+      </div>
+
+      <div className="flex flex-col items-center text-center mb-5">
+        <div className="mb-3" style={{ filter: "drop-shadow(0 0 14px rgba(196,181,253,0.6))" }}>
+          <LunaMoonBadge />
+        </div>
+        <h2 className="font-extrabold tracking-[0.3em] text-lg">LUNA</h2>
+        <p className="text-[9px] font-mono tracking-widest text-indigo-300/70 uppercase mt-1.5 leading-relaxed" lang="en">
+          Listening · Understanding<br />Nurturing · Adapting
+        </p>
+      </div>
+
+      {view === "choice" && (
+        <>
+          <p className="text-center text-base font-bold mb-1">{t("Tekrar görmek güzel.", "Good to see you again.")} 💜</p>
+          <p className="text-center text-xs text-white/45 mb-5">{t("Devam etmek için giriş yap.", "Log in to continue.")}</p>
+
+          <GoogleButtonSlot t={t} googleAvailable={googleAvailable} onGoogleClick={onGoogleClick} />
+
+          <div className="flex items-center gap-2 my-4">
+            <div className="flex-1 h-px bg-white/10" />
+            <span className="text-[10px] text-white/30 uppercase tracking-wide">{t("veya", "or")}</span>
+            <div className="flex-1 h-px bg-white/10" />
+          </div>
+
+          <button onClick={() => setView("login")} data-testid="gate-login-button"
+            className="w-full flex items-center justify-center gap-2 rounded-full py-3 text-sm font-semibold border border-white/20 hover:bg-white/5 transition-colors">
+            <Mail size={15} /> {t("E-posta ile Giriş Yap", "Log In with Email")}
+          </button>
+
+          <p className="text-center text-xs text-white/50 mt-5">
+            {t("Hesabın yok mu?", "Don't have an account?")}{" "}
+            <button onClick={() => setView("signup")} data-testid="gate-signup-button" className="inline-flex items-center gap-0.5 text-indigo-300 font-semibold hover:text-white transition-colors">
+              {t("Hemen katıl", "Join now")} <ArrowRight size={11} />
+            </button>
+          </p>
+
+          <div className="flex items-center justify-center gap-8 mt-6 pt-5 border-t border-white/10">
+            {TRUST.map((f) => (
+              <div key={f.tr} className="flex flex-col items-center gap-1.5 text-white/45">
+                <f.icon size={15} />
+                <span className="text-[9px] text-center leading-tight whitespace-pre-line">{t(f.tr, f.en)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {(view === "login" || view === "signup") && (
+        <>
+          <h3 className="text-center text-sm font-bold mb-0.5">
+            {view === "login" ? t("Giriş Yap", "Log In") : t("Hesap Oluştur", "Create Account")}
+          </h3>
+          <p className="text-center text-xs text-white/45 mb-5">
+            {view === "login"
+              ? t("Hesabına e-posta ile giriş yap.", "Log in to your account with email.")
+              : t("Birkaç saniyede hesabını oluştur.", "Create your account in seconds.")}
+          </p>
+
+          <form onSubmit={onSubmit} className="space-y-3">
+            <div className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/20 px-4 py-2.5">
+              <Mail size={15} className="text-white/40 shrink-0" />
+              <input type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)}
+                placeholder={t("E-posta", "Email")} data-testid="gate-email-input"
+                className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30" />
+            </div>
+            <div className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/20 px-4 py-2.5">
+              <Lock size={15} className="text-white/40 shrink-0" />
+              <input type="password" required minLength={view === "signup" ? 8 : undefined} value={password} onChange={(e) => setPassword(e.target.value)}
+                placeholder={view === "signup" ? t("Şifre (en az 8 karakter)", "Password (min. 8 characters)") : t("Şifre", "Password")}
+                data-testid="gate-password-input"
+                className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30" />
+            </div>
+
+            <button type="submit" disabled={loading} data-testid="gate-submit-button"
+              className="w-full flex items-center justify-center gap-2 rounded-full py-3 text-sm font-semibold transition-transform hover:scale-[1.02] disabled:opacity-60"
+              style={{ background: "linear-gradient(90deg,#6366f1,#c084fc)" }}>
+              {loading ? <Loader2 size={15} className="animate-spin" /> : (view === "login" ? t("Giriş Yap", "Log In") : t("Hesap Oluştur", "Create Account"))}
+            </button>
+          </form>
+
+          {view === "login" && (
+            <button onClick={onOpenForgot} data-testid="gate-forgot-password-button"
+              className="w-full text-center text-[11px] text-indigo-300/80 hover:text-indigo-200 mt-3 transition-colors">
+              {t("Şifremi unuttum", "Forgot password?")}
+            </button>
+          )}
+
+          <GoogleButtonSlot t={t} googleAvailable={googleAvailable} onGoogleClick={onGoogleClick} extraClass="mt-3" />
+
+          <button onClick={() => setView("choice")} data-testid="gate-back-button"
+            className="w-full text-center text-[11px] text-white/35 hover:text-white/60 mt-5 transition-colors">
+            {t("← Geri dön", "← Go back")}
+          </button>
+        </>
+      )}
+
+      {view === "forgot" && (
+        <>
+          <h3 className="text-center text-sm font-bold mb-0.5">{t("Şifremi unuttum", "Forgot password")}</h3>
+          {forgotSent ? (
+            <p className="text-center text-xs text-white/60 mb-5 leading-relaxed">
+              {t(
+                "Bu e-postaya bağlı bir hesap varsa, şifreni sıfırlaman için bir link gönderdik. Gelen kutunu kontrol et.",
+                "If an account uses that email, we've sent a link to reset the password. Check your inbox."
+              )}
+            </p>
+          ) : (
+            <>
+              <p className="text-center text-xs text-white/45 mb-5">
+                {t("Hesabına bağlı e-postayı gir, sana bir sıfırlama linki gönderelim.", "Enter the email linked to your account and we'll send you a reset link.")}
+              </p>
+              <form onSubmit={onForgotSubmit} className="space-y-3">
+                <div className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/20 px-4 py-2.5">
+                  <Mail size={15} className="text-white/40 shrink-0" />
+                  <input type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)}
+                    placeholder={t("E-posta", "Email")} data-testid="gate-forgot-email-input"
+                    className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30" />
+                </div>
+                <button type="submit" disabled={loading} data-testid="gate-forgot-submit-button"
+                  className="w-full flex items-center justify-center gap-2 rounded-full py-3 text-sm font-semibold transition-transform hover:scale-[1.02] disabled:opacity-60"
+                  style={{ background: "linear-gradient(90deg,#6366f1,#c084fc)" }}>
+                  {loading ? <Loader2 size={15} className="animate-spin" /> : t("Sıfırlama Linki Gönder", "Send Reset Link")}
+                </button>
+              </form>
+            </>
+          )}
+          <button onClick={() => setView("login")} data-testid="gate-forgot-back-button"
+            className="w-full text-center text-[11px] text-white/35 hover:text-white/60 mt-5 transition-colors">
+            {t("← Geri dön", "← Go back")}
+          </button>
+        </>
+      )}
+
+      <p className="text-center text-[9px] text-white/25 mt-6">XSF Technology · Luna · {t("Daha iyi bir yarın, seninle.", "A better tomorrow, with you.")}</p>
+    </>
+  );
+}
+
+export default function AccountGate({ lang, onDone }) {
+  const t = (tr, en) => (lang === "tr" ? tr : en);
+  const [view, setView] = useState("choice");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+  // True once we've given up waiting for GIS (blocked by an ad/privacy
+  // blocker, offline, or accounts.google.com unreachable) — read by
+  // onGoogleClick below to show a clear message instead of silently
+  // calling prompt() on an API that never finished loading.
+  const [gisFailed, setGisFailed] = useState(false);
+
+  // Google Identity Services: script + initialize, loaded once on mount.
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return; // not configured — onGoogleClick below shows a clear error instead of silently failing
+    // If GIS hasn't loaded within 5s (blocked script, dead network, slow
+    // connection), stop waiting and fall back to a real, clickable button
+    // that at least tells the user what's wrong — instead of leaving the
+    // overlay empty and looking permanently broken forever.
+    const failTimer = setTimeout(() => setGisFailed(true), 5000);
+    const existing = document.getElementById("google-identity-services");
+    const onLoad = () => {
+      if (!window.google?.accounts?.id) return;
+      clearTimeout(failTimer);
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredential,
+      });
+    };
+    const onError = () => {
+      clearTimeout(failTimer);
+      setGisFailed(true);
+    };
+    if (existing) {
+      if (window.google?.accounts?.id) onLoad();
+      else existing.addEventListener("load", onLoad);
+      existing.addEventListener("error", onError);
+      return () => {
+        clearTimeout(failTimer);
+        existing.removeEventListener("load", onLoad);
+        existing.removeEventListener("error", onError);
+      };
+    }
+    const script = document.createElement("script");
+    script.id = "google-identity-services";
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.addEventListener("load", onLoad);
+    script.addEventListener("error", onError);
+    document.head.appendChild(script);
+    return () => {
+      clearTimeout(failTimer);
+      script.removeEventListener("load", onLoad);
+      script.removeEventListener("error", onError);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Called by Google Identity Services with the signed ID token once the
+  // user picks an account in the popup — this is the SAME idToken shape
+  // loginWithGoogle() -> POST /api/auth/google -> security.py::google_login
+  // was already built to accept.
+  const handleGoogleCredential = async (response) => {
+    setLoading(true);
+    try {
+      await loginWithGoogle(response.credential);
+      toast.success(t("Tekrar görmek güzel! 💜", "Welcome back! 💜"));
+      onDone();
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 501) {
+        toast.error(t("Google girişi sunucuda henüz yapılandırılmadı.", "Google Sign-In isn't configured on the server yet."));
+      } else {
+        toast.error(t("Google ile giriş başarısız oldu, tekrar dene.", "Google Sign-In failed, try again."));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fires google.accounts.id.prompt() directly from a real click — this
+  // triggers Google's native account-chooser UI (or FedCM dialog). The
+  // notification callback is the ONLY documented way to learn WHY nothing
+  // showed (suppressed by cooldown, no Google session, unregistered
+  // origin, browser policy, etc. — see Google's IdentityCredentialError /
+  // PromptMomentNotification docs) — surfaced here as a toast instead of
+  // failing in total silence, which is what the previous hidden-iframe-
+  // overlay approach did with no way to diagnose it.
+  const onGoogleClick = () => {
+    if (!GOOGLE_CLIENT_ID) {
+      toast.error(t("Google girişi bu ortamda yapılandırılmadı.", "Google Sign-In isn't configured in this environment."));
+      return;
+    }
+    if (gisFailed || !window.google?.accounts?.id) {
+      toast.error(t(
+        "Google girişine ulaşılamadı — reklam engelleyici/gizlilik uzantın onu engelliyor olabilir. Kapatıp tekrar dene, ya da e-posta ile giriş yap.",
+        "Couldn't reach Google Sign-In — an ad/privacy blocker may be blocking it. Try disabling it, or log in with email instead."
+      ));
+      return;
+    }
+    window.google.accounts.id.prompt((notification) => {
+      const reason =
+        (notification.isNotDisplayed?.() && notification.getNotDisplayedReason?.()) ||
+        (notification.isSkippedMoment?.() && notification.getSkippedReason?.()) ||
+        null;
+      if (reason) {
+        toast.error(
+          t(`Google giriş penceresi açılamadı (${reason}). E-posta ile giriş yapabilirsin.`,
+             `Google's sign-in window couldn't open (${reason}). You can log in with email instead.`)
+        );
+      }
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!email.trim() || !password.trim()) return;
+    setLoading(true);
+    try {
+      if (view === "signup") {
+        const res = await signupWithEmail(email.trim(), password);
+        toast.success(res.verification_email_sent
+          ? t("Hesabın oluşturuldu! Doğrulama e-postasını kontrol et.", "Account created! Check your inbox to verify.")
+          : t("Hesabın oluşturuldu!", "Account created!"));
+      } else {
+        await loginWithEmail(email.trim(), password);
+        toast.success(t("Tekrar görmek güzel! 💜", "Welcome back! 💜"));
+      }
+      onDone();
+    } catch (err) {
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail;
+      if (view === "login" && status === 401) {
+        toast.error(t("E-posta veya şifre hatalı.", "Wrong email or password."));
+      } else if (view === "login" && status === 403) {
+        toast.error(t("E-postanı henüz doğrulamadın — gelen kutunu kontrol et.", "You haven't verified your email yet — check your inbox."));
+      } else if (view === "signup" && status === 409) {
+        toast.error(t("Bu e-posta zaten kullanımda. Giriş yapmayı dene.", "That email is already in use. Try logging in."));
+      } else if (status === 400 && detail) {
+        toast.error(detail);
+      } else {
+        toast.error(t("Bir sorun oldu, tekrar dene.", "Something went wrong, try again."));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotSubmit = async (e) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setLoading(true);
+    try {
+      await forgotPassword(email.trim(), lang);
+      // Deliberately always shows the same "sent" state regardless of the
+      // response — the backend never reveals whether the email actually
+      // has an account (see security.py::request_password_reset), so
+      // showing a different outcome here would defeat that.
+      setForgotSent(true);
+    } catch {
+      // A network/server error still shows the generic sent-state message —
+      // there's nothing more specific and truthful to say without either
+      // leaking account existence or asking the user to just retry blindly.
+      setForgotSent(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Not gated on gisLoaded — the button is always clickable when a Client
+  // ID is configured; onGoogleClick's own runtime checks (window.google
+  // present, gisFailed) handle "still loading" / "blocked" at click time
+  // with an appropriate message, rather than disabling the button and
+  // guessing whether GIS will finish loading before the user gives up.
+  const cardProps = {
+    lang, view, setView, email, setEmail, password, setPassword, loading,
+    googleAvailable: !!GOOGLE_CLIENT_ID, onGoogleClick, onSubmit: handleSubmit,
+    onOpenForgot: () => { setForgotSent(false); setView("forgot"); },
+    onForgotSubmit: handleForgotSubmit, forgotSent,
+  };
+
+  return (
+    <div className="h-screen w-full text-white overflow-hidden" style={{ backgroundColor: "#07040f" }}>
+      {/* Desktop: full, un-cropped photo at its native ~2:1 ratio (1774x887),
+          sized to fit ENTIRELY within the viewport on both axes (width
+          capped at 200vh, i.e. 100vh * 1774/887) so it never overflows and
+          the page never scrolls. Unlike the earlier background image, this
+          one has NO card mockup baked into the photo — the card below is
+          genuinely translucent glass over the open sofa area on the right,
+          not covering/replacing anything drawn into the image itself. */}
+      <div className="hidden lg:flex h-full w-full items-center justify-center">
+        <div className="relative" style={{ width: "min(100%, 200vh)", aspectRatio: "1774 / 887" }}>
+          <img src={accountGateBg} alt="" className="absolute inset-0 w-full h-full" style={{ objectFit: "contain" }} />
+          <div className="absolute" style={{ left: "58.7%", top: "13.5%", width: "25%", height: "76.5%" }}>
+            <div className="w-full h-full overflow-y-auto rounded-[3%] border border-white/10 p-[6%]" style={{ backgroundColor: "rgba(10,8,20,0.45)", backdropFilter: "blur(12px)" }}>
+              <GateCard {...cardProps} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile / tablet: the wide photo doesn't compose well narrow, so just
+          show the card centered on a plain dark background. */}
+      <div className="lg:hidden h-full w-full flex items-center justify-center px-4 py-10 overflow-y-auto">
+        <div className="w-full max-w-md rounded-[28px] border border-white/10 p-7" style={{ backgroundColor: "rgba(10,8,22,0.9)", backdropFilter: "blur(20px)" }}>
+          <GateCard {...cardProps} />
+        </div>
+      </div>
+    </div>
+  );
+}
