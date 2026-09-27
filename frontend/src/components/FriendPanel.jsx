@@ -3,8 +3,8 @@ import { Send, Mic, MicOff, Menu, Paperclip, X, Wand2, Image, FileText, Table, F
 import { toast } from "sonner";
 import ChatMessage from "@/components/ChatMessage";
 
-const ACCEPTED_EXT = ["png", "jpg", "jpeg", "webp", "gif", "pdf", "txt"];
-const ACCEPTED_ATTR = ".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt";
+const ACCEPTED_EXT = ["png", "jpg", "jpeg", "webp", "gif", "pdf", "txt", "csv", "docx", "xlsx", "pptx", "zip"];
+const ACCEPTED_ATTR = ".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.csv,.docx,.xlsx,.pptx,.zip";
 const MAX_FILES = 10;
 
 const QUICK_CHIPS = [
@@ -104,7 +104,7 @@ export default function FriendPanel({
     if (!incoming.length) return;
     const valid = incoming.filter((f) => ACCEPTED_EXT.includes((f.name.split(".").pop() || "").toLowerCase()));
     if (valid.length < incoming.length) {
-      toast.error(t("Bazı dosyaları okuyamıyorum (png, jpg, webp, gif, pdf, txt olmalı).", "I can't read some of these files (must be png, jpg, webp, gif, pdf, or txt)."));
+      toast.error(t("Bazı dosyaları okuyamıyorum (png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, zip olmalı).", "I can't read some of these files (must be png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, or zip)."));
     }
     if (!valid.length) return;
     setGenKind(null);

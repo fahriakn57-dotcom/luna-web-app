@@ -257,7 +257,7 @@ export default function Luna() {
     } catch (e) {
       const status = e?.response?.status;
       const msg = status === 415
-        ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, or txt).")
+        ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, zip olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, or zip).")
         : status === 413
         ? t("Dosya çok büyük.", "That file is too large.")
         : t("🌙 Dosyayı işlerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem with that file. Could you try again?");
@@ -306,7 +306,7 @@ export default function Luna() {
       const status = e?.response?.status;
       const detail = e?.response?.data?.detail || "";
       const msg = status === 415
-        ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, or txt).")
+        ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, zip olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, or zip).")
         : status === 413 && detail.includes("fazla")
         ? t("En fazla 10 dosya birden gönderebilirsin.", "You can send at most 10 files at once.")
         : status === 413
