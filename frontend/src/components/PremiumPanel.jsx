@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import { fetchSubscription, selectPlan, checkoutSubscription, cancelSubscription, fetchProfile } from "@/lib/api";
 import CheckoutModal from "@/components/CheckoutModal";
 
-const EMPTY_BILLING = { name: "", surname: "", email: "", gsmNumber: "", identityNumber: "", address: "", city: "" };
+// 2026-09-27: PayTR only needs these five (no TC Kimlik No / city — those
+// were an iyzico-specific fraud-check requirement, see git history).
+const EMPTY_BILLING = { name: "", surname: "", email: "", phone: "", address: "" };
 
 export default function PremiumPanel({ lang, onClose }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
@@ -15,7 +17,7 @@ export default function PremiumPanel({ lang, onClose }) {
   const [cancelling, setCancelling] = useState(false);
   const [billingPlan, setBillingPlan] = useState(null); // plan id currently filling the billing form for
   const [billing, setBilling] = useState(EMPTY_BILLING);
-  const [checkoutHtml, setCheckoutHtml] = useState(null);
+  const [checkoutFields, setCheckoutFields] = useState(null);
 
   useEffect(() => {
     fetchSubscription()
@@ -62,9 +64,9 @@ export default function PremiumPanel({ lang, onClose }) {
     }
     setSelecting(billingPlan);
     try {
-      const { checkout_form_content } = await checkoutSubscription(billingPlan, billing);
-      if (!checkout_form_content) throw new Error("no checkout form");
-      setCheckoutHtml(checkout_form_content);
+      const { form_fields } = await checkoutSubscription(billingPlan, billing);
+      if (!form_fields) throw new Error("no checkout form");
+      setCheckoutFields(form_fields);
       setBillingPlan(null);
     } catch (e) {
       const detail = e?.response?.data?.detail;
@@ -111,7 +113,7 @@ export default function PremiumPanel({ lang, onClose }) {
             </button>
             <p className="text-sm font-semibold text-white mb-1">{t("Fatura Bilgileri", "Billing Details")}</p>
             <p className="text-[11px] text-white/40 mb-4">
-              {t("Ödeme sağlayıcımız iyzico, kimlik doğrulaması için bu bilgileri istiyor.", "Our payment provider iyzico requires this info to verify identity.")}
+              {t("Ödeme sağlayıcımız PayTR, kart kaydı için bu bilgileri istiyor.", "Our payment provider PayTR requires this info to register your card.")}
             </p>
             <div className="grid grid-cols-2 gap-2.5">
               <input required value={billing.name} onChange={(e) => setBilling((b) => ({ ...b, name: e.target.value }))}
@@ -124,22 +126,16 @@ export default function PremiumPanel({ lang, onClose }) {
             <input required type="email" value={billing.email} onChange={(e) => setBilling((b) => ({ ...b, email: e.target.value }))}
               placeholder={t("E-posta", "Email")} data-testid="billing-email-input"
               className="w-full mt-2.5 bg-black/25 outline-none px-3 py-2 rounded-lg border border-purple-400/20 focus:border-purple-400 text-sm text-white placeholder:text-white/30" />
-            <input required value={billing.gsmNumber} onChange={(e) => setBilling((b) => ({ ...b, gsmNumber: e.target.value }))}
-              placeholder={t("Telefon (ör. +905551112233)", "Phone (e.g. +905551112233)")} data-testid="billing-gsm-input"
-              className="w-full mt-2.5 bg-black/25 outline-none px-3 py-2 rounded-lg border border-purple-400/20 focus:border-purple-400 text-sm text-white placeholder:text-white/30" />
-            <input required value={billing.identityNumber} onChange={(e) => setBilling((b) => ({ ...b, identityNumber: e.target.value }))}
-              placeholder={t("TC Kimlik No", "National ID")} data-testid="billing-identity-input"
+            <input required value={billing.phone} onChange={(e) => setBilling((b) => ({ ...b, phone: e.target.value }))}
+              placeholder={t("Telefon (ör. +905551112233)", "Phone (e.g. +905551112233)")} data-testid="billing-phone-input"
               className="w-full mt-2.5 bg-black/25 outline-none px-3 py-2 rounded-lg border border-purple-400/20 focus:border-purple-400 text-sm text-white placeholder:text-white/30" />
             <input required value={billing.address} onChange={(e) => setBilling((b) => ({ ...b, address: e.target.value }))}
               placeholder={t("Adres", "Address")} data-testid="billing-address-input"
               className="w-full mt-2.5 bg-black/25 outline-none px-3 py-2 rounded-lg border border-purple-400/20 focus:border-purple-400 text-sm text-white placeholder:text-white/30" />
-            <input required value={billing.city} onChange={(e) => setBilling((b) => ({ ...b, city: e.target.value }))}
-              placeholder={t("Şehir", "City")} data-testid="billing-city-input"
-              className="w-full mt-2.5 bg-black/25 outline-none px-3 py-2 rounded-lg border border-purple-400/20 focus:border-purple-400 text-sm text-white placeholder:text-white/30" />
             <button type="submit" disabled={selecting === billingPlan} data-testid="billing-submit-button"
               className="w-full mt-4 py-2.5 rounded-full text-xs font-semibold text-white disabled:opacity-60"
               style={{ background: "linear-gradient(90deg,#6366f1,#e879f9)" }}>
-              {selecting === billingPlan ? t("Yönlendiriliyor...", "Redirecting...") : t("Ödemeye Geç", "Continue to Payment")}
+              {selecting === billingPlan ? t("Hazırlanıyor...", "Preparing...") : t("Devam Et", "Continue")}
             </button>
           </form>
         ) : loading ? (
@@ -186,7 +182,7 @@ export default function PremiumPanel({ lang, onClose }) {
                           ? { background: "linear-gradient(90deg,#6366f1,#e879f9)", color: "#fff" }
                           : { border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}>
                       {isCurrent ? t("Mevcut Plan ✓", "Current Plan ✓")
-                        : selecting === plan.id ? t("Yönlendiriliyor...", "Redirecting...")
+                        : selecting === plan.id ? t("Hazırlanıyor...", "Preparing...")
                         : plan.id === "free" ? t("Free'ye Geç", "Switch to Free") : t("Bu Planı Seç", "Choose Plan")}
                     </button>
                   </div>
@@ -210,13 +206,18 @@ export default function PremiumPanel({ lang, onClose }) {
                 {t("Son ödeme denemesi başarısız oldu. Tekrar deneyebilirsin.", "Your last payment attempt failed. You can try again.")}
               </p>
             )}
+            {current.status === "payment_failed" && (
+              <p className="text-center text-[11px] text-red-300/70 mt-5">
+                {t("Tekrarlayan ödemen 3 kez başarısız oldu, Free plana düşürüldün. Kartını güncelleyip tekrar deneyebilirsin.", "Your recurring payment failed 3 times and you were moved to Free. You can update your card and try again.")}
+              </p>
+            )}
           </>
         )}
       </div>
 
-      {checkoutHtml && (
-        <CheckoutModal lang={lang} checkoutFormContent={checkoutHtml}
-          onClose={() => { setCheckoutHtml(null); refreshSubscription(); }} />
+      {checkoutFields && (
+        <CheckoutModal lang={lang} formFields={checkoutFields}
+          onClose={() => { setCheckoutFields(null); refreshSubscription(); }} />
       )}
     </div>
   );

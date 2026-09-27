@@ -541,11 +541,11 @@ export async function selectPlan(plan) {
   return res.data;
 }
 
-// Starts a real iyzico recurring-subscription checkout for a paid plan.
-// Returns { token, checkout_form_content } — checkout_form_content is
-// iyzico's own HTML/script snippet, meant to be injected as-is (see
-// components/CheckoutModal.jsx for how the embedded <script> gets executed,
-// since a plain innerHTML assignment silently drops script tags).
+// Starts a real PayTR card-registration + first-charge request (2026-09-27,
+// replaces iyzico — see git history). Returns { merchant_oid, form_fields }:
+// form_fields are the signed, card-free fields components/CheckoutModal.jsx
+// posts directly to PayTR alongside the raw card fields the user types —
+// this backend call never sees or handles card data.
 export async function checkoutSubscription(plan, billing) {
   const headers = await authHeaders();
   const res = await axios.post(`${API}/subscription/checkout`, {
@@ -553,10 +553,8 @@ export async function checkoutSubscription(plan, billing) {
     name: billing.name,
     surname: billing.surname,
     email: billing.email,
-    gsm_number: billing.gsmNumber,
-    identity_number: billing.identityNumber,
+    phone: billing.phone,
     address: billing.address,
-    city: billing.city,
   }, { headers });
   return res.data;
 }
