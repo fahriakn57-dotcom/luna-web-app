@@ -19,6 +19,7 @@ import ImageGalleryPanel from "@/components/ImageGalleryPanel";
 import ConversationsPanel from "@/components/ConversationsPanel";
 import DocGeneratorPanel from "@/components/DocGeneratorPanel";
 import PremiumPanel from "@/components/PremiumPanel";
+import VoiceCallModal from "@/components/VoiceCallModal";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import {
   sendChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, fetchTTS, clearMemories, isPaired, fetchProfile,
@@ -90,6 +91,11 @@ export default function Luna() {
   const [conversationId, setConversationId] = useState(null);
   const [premiumOpen, setPremiumOpen] = useState(false);
   const [userName, setUserName] = useState("");
+  // True only while the dedicated voice-call screen is open. Replies
+  // auto-speak ONLY while this is true — normal chat stays silent by
+  // default (the per-message speaker button was removed; this is now the
+  // only way to hear Luna outside the call screen going away entirely).
+  const [callActive, setCallActive] = useState(false);
 
   const audioRef = useRef(null);
   const t = (tr, en) => (lang === "tr" ? tr : en);
@@ -206,8 +212,9 @@ export default function Luna() {
       const reply = await sendChat({ message: content, mode, lang, conversationId });
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode };
       setMessages((m) => [...m, lunaMsg]);
-      // Chat text replies stay silent by default — the per-message speaker
-      // button (Chat's own manual play) is how someone hears a reply.
+      // Chat text replies stay silent by default — Luna only speaks while
+      // the dedicated voice-call screen is open.
+      if (callActive) playAudio(lunaMsg);
     } catch (e) {
       // Covers both a failed /api/chat call and a failed auth step inside
       // sendChat() (authHeaders() -> registerDevice(), which throws the
@@ -228,7 +235,7 @@ export default function Luna() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, sending, mode, lang, conversationId]);
+  }, [input, sending, mode, lang, conversationId, callActive]);
 
   // Same optimistic-bubble/error-handling shape as handleSend above, for an
   // image (png/jpg/webp/gif) or document (pdf/txt) instead of plain text —
@@ -438,8 +445,6 @@ export default function Luna() {
           sending={sending}
           listening={listening}
           interim={interim}
-          playingId={playingId}
-          loadingId={loadingId}
           input={input}
           setInput={setInput}
           onSend={handleSend}
@@ -450,7 +455,7 @@ export default function Luna() {
           onGenerateDoc={handleGenerateDoc}
           generatingDoc={generatingDoc}
           onToggleMic={toggleMic}
-          onPlay={playAudio}
+          onOpenCall={() => setCallActive(true)}
           workMode={mode === "work"}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
         />
@@ -502,6 +507,19 @@ export default function Luna() {
       {openPanel === "work-table" && <DocGeneratorPanel kind="table" lang={lang} mode={mode} onClose={() => setOpenPanel(null)} />}
       {openPanel === "work-chart" && <DocGeneratorPanel kind="chart" lang={lang} mode={mode} onClose={() => setOpenPanel(null)} />}
       {premiumOpen && <PremiumPanel lang={lang} onClose={() => setPremiumOpen(false)} />}
+
+      {callActive && (
+        <VoiceCallModal
+          lang={lang}
+          sending={sending}
+          listening={listening}
+          interim={interim}
+          playingId={playingId}
+          lastLunaId={[...messages].reverse().find((m) => m.role === "luna")?.id}
+          onToggleMic={toggleMic}
+          onClose={() => setCallActive(false)}
+        />
+      )}
     </div>
   );
 }

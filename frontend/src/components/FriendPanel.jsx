@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Mic, MicOff, Menu, Paperclip, X, Wand2, Image, FileText, Table, FileType2, Presentation, Grid3x3, BarChart3 } from "lucide-react";
+import { Send, Mic, MicOff, Menu, Paperclip, X, Wand2, Image, FileText, Table, FileType2, Presentation, Grid3x3, BarChart3, Phone } from "lucide-react";
 import { toast } from "sonner";
 import ChatMessage from "@/components/ChatMessage";
 
@@ -64,8 +64,8 @@ const GEN_KIND_CONFIG = {
 const GEN_MENU_ORDER = ["image", "pdf", "word", "ppt", "excel", "table", "chart"];
 
 export default function FriendPanel({
-  lang, messages, sending, listening, interim, playingId, loadingId,
-  input, setInput, onSend, onSendMedia, onSendMediaBatch, onToggleMic, onPlay,
+  lang, messages, sending, listening, interim,
+  input, setInput, onSend, onSendMedia, onSendMediaBatch, onToggleMic, onOpenCall,
   workMode, onGenerateImage, generatingImage, onGenerateDoc, generatingDoc, onOpenMobileMenu,
 }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
@@ -212,6 +212,14 @@ export default function FriendPanel({
                 : <>{t("Ben ", "I'm ")}<span className="bg-gradient-to-r from-indigo-400 to-fuchsia-400 bg-clip-text text-transparent">Luna</span>{t(", senin AI arkadaşın.", ", your AI companion.")}</>}
             </h1>
           </div>
+          {!workMode && (
+            <button onClick={onOpenCall} data-testid="open-voice-call-button"
+              aria-label={t("Sesli ara", "Voice call")}
+              className="ml-auto shrink-0 w-10 h-10 rounded-full flex items-center justify-center border border-purple-400/30 text-purple-200 hover:bg-purple-400/15 transition-colors"
+              style={{ backgroundColor: "rgba(192,132,252,0.10)" }}>
+              <Phone size={17} />
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2 mt-2 mb-2">
           <span className={`w-2 h-2 rounded-full ${sending || listening ? "bg-purple-400 animate-pulse" : "bg-emerald-400"}`} />
@@ -263,7 +271,7 @@ export default function FriendPanel({
               </div>
             )}
             {messages.map((m) => (
-              <ChatMessage key={m.id} msg={m} mode="friend" onPlay={onPlay} playingId={playingId} loadingId={loadingId} />
+              <ChatMessage key={m.id} msg={m} />
             ))}
             {busy && (
               <div className="flex justify-start">

@@ -1,26 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
-import { Volume2, Loader2, Download, X, FileText } from "lucide-react";
+import { Download, X, FileText } from "lucide-react";
 import lunaAvatar from "@/assets/luna-avatar.png";
 
-// Gemini TTS (the configured provider) takes a genuine several seconds per
-// UNIQUE line — there's no way to make the generation itself faster from
-// here. This is purely about not making that wait feel broken: past this
-// point a plain spinner starts reading as "stuck", so a short reassurance
-// appears instead of nothing.
-const SLOW_HINT_MS = 2500;
-
-export default function ChatMessage({ msg, onPlay, playingId, loadingId }) {
+export default function ChatMessage({ msg }) {
   const isUser = msg.role === "user";
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [showSlowHint, setShowSlowHint] = useState(false);
-  const isLoadingVoice = loadingId === msg.id;
-
-  useEffect(() => {
-    if (!isLoadingVoice) { setShowSlowHint(false); return; }
-    const timer = setTimeout(() => setShowSlowHint(true), SLOW_HINT_MS);
-    return () => clearTimeout(timer);
-  }, [isLoadingVoice]);
 
   const userBubble = "bg-gradient-to-br from-fuchsia-500/22 to-indigo-500/18 border-fuchsia-400/30 text-fuchsia-50";
   const lunaBubble = "bg-[#140b28]/90 border-purple-400/20 text-purple-50";
@@ -37,21 +22,11 @@ export default function ChatMessage({ msg, onPlay, playingId, loadingId }) {
         isUser ? userBubble + " rounded-br-md" : lunaBubble
       }`}>
         {!isUser && (
-          <div className="flex items-center justify-between gap-3 mb-1">
+          <div className="mb-1">
             <span className="text-[10px] uppercase tracking-[0.2em] text-purple-300/80">
               Luna
             </span>
-            <button onClick={() => onPlay(msg)} data-testid="play-tts-button"
-              aria-label="Sesli oynat / Play voice"
-              disabled={isLoadingVoice}
-              className="opacity-60 hover:opacity-100 transition-opacity text-purple-300 disabled:cursor-wait">
-              {isLoadingVoice ? <Loader2 size={14} className="animate-spin" />
-                : <Volume2 size={14} className={playingId === msg.id ? "animate-pulse" : ""} />}
-            </button>
           </div>
-        )}
-        {isLoadingVoice && showSlowHint && (
-          <p className="text-[10px] text-purple-300/50 -mt-0.5 mb-1">Ses hazırlanıyor, birkaç saniye sürebilir…</p>
         )}
         {msg.imageUrl && (
           <button onClick={() => setLightboxOpen(true)} data-testid="chat-image-attachment"
