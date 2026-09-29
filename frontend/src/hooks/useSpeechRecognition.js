@@ -104,5 +104,16 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
     setListening(false);
   }, []);
 
-  return { listening, interim, supported, start, stop };
+  // Unlike stop(), which still delivers a final result for the words heard
+  // so far, abort() discards them — for hanging up mid-sentence, where the
+  // half-spoken fragment must NOT be sent.
+  const abort = useCallback(() => {
+    if (!recognitionRef.current) return;
+    deliberateStopRef.current = true;
+    try { recognitionRef.current.abort(); } catch (_) {}
+    setListening(false);
+    setInterim("");
+  }, []);
+
+  return { listening, interim, supported, start, stop, abort };
 }

@@ -103,7 +103,13 @@ export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
     setGenerating(true);
     try {
       const result = await generate(rawData.trim(), title.trim(), mode);
-      setFiles((f) => [{ id: `tmp-${Date.now()}`, title: result.title, fileUrl: result.fileUrl, createdAt: new Date().toISOString() }, ...f]);
+      // The generate response carries no id, so re-read the list — the new
+      // file is stored server-side and comes back with its real, deletable id.
+      try {
+        setFiles(await fetchFiles());
+      } catch {
+        setFiles((f) => [{ id: `tmp-${Date.now()}`, title: result.title, fileUrl: result.fileUrl, createdAt: new Date().toISOString() }, ...f]);
+      }
       setTitle("");
       setRawData("");
       toast.success(result.reply);

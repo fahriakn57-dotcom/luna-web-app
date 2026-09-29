@@ -1,5 +1,5 @@
 import "@/App.css";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Luna from "@/pages/Luna";
 import AccountGate from "@/pages/AccountGate";
@@ -10,10 +10,11 @@ import { isAuthed } from "@/lib/api";
 
 function Home() {
   const [authed, setAuthed] = useState(() => isAuthed());
-  const lang = localStorage.getItem("luna_lang") || "tr";
+  const [lang, setLang] = useState(() => localStorage.getItem("luna_lang") || "tr");
+  useEffect(() => { localStorage.setItem("luna_lang", lang); }, [lang]);
 
   if (!authed) {
-    return <AccountGate lang={lang} onDone={() => setAuthed(true)} />;
+    return <AccountGate lang={lang} setLang={setLang} onDone={() => setAuthed(true)} />;
   }
   return <Luna />;
 }

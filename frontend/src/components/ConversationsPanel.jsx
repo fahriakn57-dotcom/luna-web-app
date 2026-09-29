@@ -98,7 +98,7 @@ export default function ConversationsPanel({ lang, mode, activeConversationId, o
                   <p className="text-[11px] text-purple-300/50">{relTime(c.updated_at, lang)}</p>
                 </div>
                 <span onClick={(e) => handleDelete(e, c.id)} data-testid="conversation-delete-button"
-                  className="shrink-0 text-white/25 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1">
+                  className="shrink-0 text-white/25 hover:text-red-400 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 transition-opacity p-1">
                   <Trash2 size={14} />
                 </span>
               </button>

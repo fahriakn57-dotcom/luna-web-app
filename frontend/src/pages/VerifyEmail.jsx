@@ -42,7 +42,7 @@ export default function VerifyEmail() {
             </p>
           </>
         )}
-        <Link to="/app" className="text-purple-400 hover:text-purple-300 underline">
+        <Link to="/" className="text-purple-400 hover:text-purple-300 underline">
           Luna'ya dön
         </Link>
       </div>

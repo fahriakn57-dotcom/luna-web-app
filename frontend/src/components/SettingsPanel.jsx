@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { X, Globe, Smartphone, Trash2, Settings as SettingsIcon, User, Sparkles, LogOut, MessageCircle, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
-import { fetchProfile, updateProfile } from "@/lib/api";
+import { fetchProfile, updateProfile, signOut } from "@/lib/api";
 import { LANGUAGES } from "@/lib/languages";
 
 const TONES = [
@@ -110,8 +110,7 @@ export default function SettingsPanel({
   };
 
   const handleSignOut = () => {
-    localStorage.removeItem("luna_device_id");
-    localStorage.removeItem("luna_device_secret");
+    signOut();
     window.location.href = "/";
   };
 

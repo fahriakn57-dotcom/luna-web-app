@@ -85,6 +85,15 @@ function markAuthed() {
   localStorage.setItem(AUTHED_KEY, "1");
 }
 
+// Must clear AUTHED_KEY along with the device identity — otherwise the next
+// visit skips the account gate (isAuthed() still true) and registerDevice()
+// silently mints a brand-new empty anonymous account.
+export function signOut() {
+  localStorage.removeItem(DEVICE_ID_KEY);
+  localStorage.removeItem(DEVICE_SECRET_KEY);
+  localStorage.removeItem(AUTHED_KEY);
+}
+
 // Creates a brand-new account: registers this browser as a fresh device
 // (if it isn't one already), then attaches email+password to it so it can
 // be recovered from other devices later via loginWithEmail().

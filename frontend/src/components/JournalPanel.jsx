@@ -130,7 +130,7 @@ export default function JournalPanel({ lang, onClose }) {
                   <div className="group">
                     <div className="flex items-center justify-between mb-1.5">
                       <p className="text-[11px] font-mono text-purple-300/70 uppercase tracking-wide">{formatDateTime(e.created_at, lang)}</p>
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-2 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                         <button onClick={() => startEdit(e)} data-testid="journal-edit-button" className="text-white/30 hover:text-purple-300"><Pencil size={13} /></button>
                         <button onClick={() => handleDelete(e.id)} data-testid="journal-delete-button" className="text-white/30 hover:text-red-400"><Trash2 size={13} /></button>
                       </div>

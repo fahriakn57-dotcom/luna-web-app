@@ -91,11 +91,13 @@ export default function Luna() {
   const [conversationId, setConversationId] = useState(null);
   const [premiumOpen, setPremiumOpen] = useState(false);
   const [userName, setUserName] = useState("");
-  // True only while the dedicated voice-call screen is open. Replies
-  // auto-speak ONLY while this is true — normal chat stays silent by
-  // default (the per-message speaker button was removed; this is now the
-  // only way to hear Luna outside the call screen going away entirely).
+  // True only while the dedicated voice-call screen is open — the only
+  // place Luna speaks replies aloud; normal chat stays silent.
   const [callActive, setCallActive] = useState(false);
+  // Read at the moment a reply/TTS arrives, not when the request started —
+  // closing the call mid-request must keep Luna silent.
+  const callActiveRef = useRef(false);
+  callActiveRef.current = callActive;
 
   const audioRef = useRef(null);
   const t = (tr, en) => (lang === "tr" ? tr : en);
@@ -131,14 +133,18 @@ export default function Luna() {
   // circular dependency (the hook below needs onSpeechResult as an input,
   // stop only exists once the hook itself has run).
   const sttStopRef = useRef(() => {});
+  // Same indirection for handleSend: onSpeechResult is only recreated on
+  // mode/lang changes, so calling handleSend directly would use a stale
+  // copy (old conversationId, and callActive=false inside the call screen).
+  const handleSendRef = useRef(() => {});
 
   const onSpeechResult = useCallback((text) => {
     sttStopRef.current();
-    if (text) handleSend(text);
+    if (text) handleSendRef.current(text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, lang]);
 
-  const { listening, interim, supported, start, stop } = useSpeechRecognition({ lang, onResult: onSpeechResult, autoRestart: false });
+  const { listening, interim, supported, start, stop, abort } = useSpeechRecognition({ lang, onResult: onSpeechResult, autoRestart: false });
   sttStopRef.current = stop;
 
   // Switching mode always drops back to that mode's default thread — a
@@ -186,6 +192,7 @@ export default function Luna() {
       setLoadingId(msg.id);
       const url = await fetchTTS({ text: msg.text, mode });
       setLoadingId(null);
+      if (!callActiveRef.current) return;
       if (audioRef.current) audioRef.current.pause();
       const audio = new Audio(url);
       audioRef.current = audio;
@@ -194,8 +201,12 @@ export default function Luna() {
       audio.onerror = () => setPlayingId(null);
       await audio.play();
     } catch (e) {
+      // pause() interrupted a pending play() — endCall (already reset the
+      // state) or a newer reply taking over; not a real failure.
+      if (e?.name === "AbortError") return;
       setLoadingId(null);
       setPlayingId(null);
+      if (!callActiveRef.current) return;
       toast.error(t("Ses oluşturulamadı", "Voice failed"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -214,7 +225,7 @@ export default function Luna() {
       setMessages((m) => [...m, lunaMsg]);
       // Chat text replies stay silent by default — Luna only speaks while
       // the dedicated voice-call screen is open.
-      if (callActive) playAudio(lunaMsg);
+      if (callActiveRef.current) playAudio(lunaMsg);
     } catch (e) {
       // Covers both a failed /api/chat call and a failed auth step inside
       // sendChat() (authHeaders() -> registerDevice(), which throws the
@@ -235,7 +246,17 @@ export default function Luna() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, sending, mode, lang, conversationId, callActive]);
+  }, [input, sending, mode, lang, conversationId]);
+  handleSendRef.current = handleSend;
+
+  const endCall = () => {
+    setCallActive(false);
+    callActiveRef.current = false;
+    if (audioRef.current) audioRef.current.pause();
+    setPlayingId(null);
+    setLoadingId(null);
+    if (listening) abort();
+  };
 
   // Same optimistic-bubble/error-handling shape as handleSend above, for an
   // image (png/jpg/webp/gif) or document (pdf/txt) instead of plain text —
@@ -517,7 +538,7 @@ export default function Luna() {
           playingId={playingId}
           lastLunaId={[...messages].reverse().find((m) => m.role === "luna")?.id}
           onToggleMic={toggleMic}
-          onClose={() => setCallActive(false)}
+          onClose={endCall}
         />
       )}
     </div>

@@ -1,5 +1,3 @@
-import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import {
   Smile, BookOpen, Heart, Target, StickyNote, Bell, Settings,
   Crown, ChevronRight, LogOut, Sparkles, X,
@@ -44,10 +42,12 @@ const WORK_ITEMS = [
   { key: "settings", icon: Settings, label: "Ayarlar" },
 ];
 
-const SOON_KEYS = new Set(["tasks", "data", "analytics"]);
+// The router's basename is "/app", so react-router's navigate("/") only
+// lands back on /app/ — leaving for the marketing site needs a real
+// full-page navigation to the domain root.
+const goToMarketingHome = () => { window.location.href = "/"; };
 
 export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories, onOpenSettings, onOpenPanel, onOpenPremium, onOpenConversations, mobileOpen, onCloseMobile }) {
-  const navigate = useNavigate();
   const items = mode === "work" ? WORK_ITEMS : FRIEND_ITEMS;
   const t = (tr, en) => (lang === "tr" ? tr : en);
 
@@ -57,10 +57,6 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
     if (key === "settings") return onOpenSettings();
     if (key === "friend" || key === "work") return onNavigate(key);
     if (["journal", "goals", "notes", "alarms", "hobbies", "mood", "day-info", "usage", "work-images", "work-pdf", "work-excel", "work-word", "work-ppt", "work-table", "work-chart"].includes(key)) return onOpenPanel(key);
-    if (SOON_KEYS.has(key)) {
-      toast(t("Yakında geliyor 🚀", "Coming soon 🚀"));
-      return;
-    }
   };
 
   return (
@@ -73,7 +69,7 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
       }`}
         style={{ backgroundColor: "rgba(7,4,15,0.96)" }}>
       <div className="flex items-center justify-between mb-4 shrink-0">
-        <button onClick={() => navigate("/")} data-testid="sidebar-logo"
+        <button onClick={goToMarketingHome} data-testid="sidebar-logo"
           className="flex items-center gap-2.5 px-2">
           <img src={lunaLogo} alt="Luna" className="w-8 h-8 rounded-full object-cover" />
           <span className="font-extrabold tracking-[0.15em] text-white">LUNA</span>
@@ -140,7 +136,7 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
         </span>
       </div>
 
-      <button onClick={() => navigate("/")} data-testid="sidebar-logout"
+      <button onClick={goToMarketingHome} data-testid="sidebar-logout"
         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-white/45 hover:text-white hover:bg-white/5 transition-colors">
         <LogOut size={15} /> {t("Ana sayfaya dön", "Back to home")}
       </button>

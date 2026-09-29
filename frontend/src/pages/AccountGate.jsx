@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Mail, ArrowRight, Loader2, Lock, ShieldCheck, Fingerprint, User, ChevronDown, Globe } from "lucide-react";
 import accountGateBg from "@/assets/account-gate.png";
@@ -67,13 +67,15 @@ function GoogleButtonSlot({ t, googleAvailable, onGoogleClick, extraClass = "" }
   );
 }
 
-function GateCard({ lang, view, setView, email, setEmail, password, setPassword, loading, googleAvailable, onGoogleClick, onSubmit, onOpenForgot, onForgotSubmit, forgotSent }) {
+function GateCard({ lang, setLang, view, setView, email, setEmail, password, setPassword, loading, googleAvailable, onGoogleClick, onSubmit, onOpenForgot, onForgotSubmit, forgotSent }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
 
   return (
     <>
       <div className="flex items-center justify-end mb-1">
-        <button className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition-colors">
+        <button onClick={() => setLang((l) => (l === "tr" ? "en" : "tr"))} data-testid="gate-lang-toggle"
+          aria-label={t("Dili değiştir", "Change language")}
+          className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition-colors">
           <Globe size={13} /> {lang === "tr" ? "TR" : "EN"} <ChevronDown size={12} />
         </button>
       </div>
@@ -215,7 +217,7 @@ function GateCard({ lang, view, setView, email, setEmail, password, setPassword,
   );
 }
 
-export default function AccountGate({ lang, onDone }) {
+export default function AccountGate({ lang, setLang, onDone }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
   const [view, setView] = useState("choice");
   const [email, setEmail] = useState("");
@@ -227,6 +229,10 @@ export default function AccountGate({ lang, onDone }) {
   // onGoogleClick below to show a clear message instead of silently
   // calling prompt() on an API that never finished loading.
   const [gisFailed, setGisFailed] = useState(false);
+  // GIS is initialized once on mount, but the TR/EN toggle can change `lang`
+  // afterwards — route its callback through a ref so the sign-in toasts use
+  // the current language, not the one the page loaded with.
+  const credentialHandlerRef = useRef(null);
 
   // Google Identity Services: script + initialize, loaded once on mount.
   useEffect(() => {
@@ -242,7 +248,7 @@ export default function AccountGate({ lang, onDone }) {
       clearTimeout(failTimer);
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
-        callback: handleGoogleCredential,
+        callback: (response) => credentialHandlerRef.current?.(response),
       });
     };
     const onError = () => {
@@ -296,6 +302,7 @@ export default function AccountGate({ lang, onDone }) {
       setLoading(false);
     }
   };
+  credentialHandlerRef.current = handleGoogleCredential;
 
   // Fires google.accounts.id.prompt() directly from a real click — this
   // triggers Google's native account-chooser UI (or FedCM dialog). The
@@ -392,7 +399,7 @@ export default function AccountGate({ lang, onDone }) {
   // with an appropriate message, rather than disabling the button and
   // guessing whether GIS will finish loading before the user gives up.
   const cardProps = {
-    lang, view, setView, email, setEmail, password, setPassword, loading,
+    lang, setLang, view, setView, email, setEmail, password, setPassword, loading,
     googleAvailable: !!GOOGLE_CLIENT_ID, onGoogleClick, onSubmit: handleSubmit,
     onOpenForgot: () => { setForgotSent(false); setView("forgot"); },
     onForgotSubmit: handleForgotSubmit, forgotSent,

@@ -137,7 +137,7 @@ export default function NotesPanel({ lang, onClose }) {
                       {CAT_LABELS[n.category] ? t(CAT_LABELS[n.category].tr, CAT_LABELS[n.category].en) : n.category}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-2 shrink-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                     <button onClick={() => startEdit(n)} data-testid="note-edit-button" className="text-white/30 hover:text-purple-300"><Pencil size={13} /></button>
                     <button onClick={() => handleDelete(n.id)} data-testid="note-delete-button" className="text-white/30 hover:text-red-400"><Trash2 size={13} /></button>
                   </div>

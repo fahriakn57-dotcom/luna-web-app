@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { Download, X, FileText } from "lucide-react";
+import { Download, X, FileText, Maximize2 } from "lucide-react";
 import lunaAvatar from "@/assets/luna-avatar.png";
 
 export default function ChatMessage({ msg }) {
@@ -34,7 +34,7 @@ export default function ChatMessage({ msg }) {
             <img src={msg.imageUrl} alt=""
               className="max-w-full max-h-64 rounded-xl object-cover transition-opacity group-hover:opacity-80" />
             <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/0 group-hover:bg-black/25 transition-colors opacity-0 group-hover:opacity-100">
-              <Download size={22} className="text-white drop-shadow" />
+              <Maximize2 size={22} className="text-white drop-shadow" />
             </span>
           </button>
         )}
