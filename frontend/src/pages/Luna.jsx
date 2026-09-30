@@ -20,6 +20,7 @@ import ConversationsPanel from "@/components/ConversationsPanel";
 import DocGeneratorPanel from "@/components/DocGeneratorPanel";
 import PremiumPanel from "@/components/PremiumPanel";
 import VoiceCallModal from "@/components/VoiceCallModal";
+import TermsGate from "@/components/TermsGate";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import {
   sendChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, fetchTTS, clearMemories, isPaired, fetchProfile,
@@ -90,6 +91,9 @@ export default function Luna() {
   // transcript loads instead (see the mode/conversationId effect below).
   const [conversationId, setConversationId] = useState(null);
   const [premiumOpen, setPremiumOpen] = useState(false);
+  // The profile, kept only while its terms still need (re-)accepting — see
+  // the mount effect below; null = nothing to accept.
+  const [termsProfile, setTermsProfile] = useState(null);
   const [userName, setUserName] = useState("");
   // True only while the dedicated voice-call screen is open — the only
   // place Luna speaks replies aloud; normal chat stays silent.
@@ -101,6 +105,19 @@ export default function Luna() {
 
   const audioRef = useRef(null);
   const t = (tr, en) => (lang === "tr" ? tr : en);
+  // A plan-quota 429 carries a curated reason already translated into the
+  // account's language (free plan's daily count, or a paid plan's weekly /
+  // 30-day quota) — show it instead of guessing "daily". A rate-limit 429
+  // (it has Retry-After) gets our own localized text instead of its
+  // Turkish-only detail. null for other errors.
+  const quotaMessage = (e) => {
+    if (e?.response?.status !== 429) return null;
+    if (e.response.headers?.["retry-after"]) {
+      return t("Çok hızlı gidiyorsun, birkaç saniye sonra tekrar dene.", "You're going a bit fast — try again in a few seconds.");
+    }
+    const detail = e.response.data?.detail;
+    return (typeof detail === "string" && detail) || t("Kullanım sınırına ulaştın.", "You've reached your usage limit.");
+  };
 
   useEffect(() => { localStorage.setItem("luna_mode", mode); }, [mode]);
   useEffect(() => { localStorage.setItem("luna_lang", lang); }, [lang]);
@@ -127,6 +144,21 @@ export default function Luna() {
     const newSearch = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (newSearch ? `?${newSearch}` : ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // One-time terms check on mount (NOT in the messages effect below, which
+  // re-runs on every mode switch). Accounts that never accepted the current
+  // Kullanım Şartları version — older accounts, Google sign-ups, or everyone
+  // after a terms update — get the TermsGate modal. A backend that doesn't
+  // report terms_current_version yet shows nothing rather than a gate whose
+  // "accept" could never stick.
+  useEffect(() => {
+    let cancelled = false;
+    fetchProfile().then((p) => {
+      if (cancelled || !p?.terms_current_version) return;
+      if (p.terms_accepted_version !== p.terms_current_version) setTermsProfile(p);
+    }).catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   // Indirection so onSpeechResult can call the CURRENT stop() without a
@@ -234,9 +266,10 @@ export default function Luna() {
       // message. The optimistic user bubble above is intentionally left in
       // place (not removed) so nothing the user typed disappears, and
       // `finally` below always clears `sending` so the input stays usable
-      // for an immediate retry.
+      // for an immediate retry. The one exception is a usage limit (429),
+      // whose curated message tells the user when they can continue.
       toast.error(
-        t(
+        quotaMessage(e) || t(
           "🌙 Şu an sana cevap verirken küçük bir sorun yaşadım. Biraz sonra tekrar deneyelim.",
           "🌙 I ran into a small problem answering you just now. Let's try again in a bit."
         ),
@@ -284,11 +317,11 @@ export default function Luna() {
       setMessages((m) => [...m, lunaMsg]);
     } catch (e) {
       const status = e?.response?.status;
-      const msg = status === 415
+      const msg = quotaMessage(e) || (status === 415
         ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, zip olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, or zip).")
         : status === 413
         ? t("Dosya çok büyük.", "That file is too large.")
-        : t("🌙 Dosyayı işlerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem with that file. Could you try again?");
+        : t("🌙 Dosyayı işlerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem with that file. Could you try again?"));
       toast.error(msg, { duration: 6000 });
     } finally {
       setSending(false);
@@ -333,13 +366,13 @@ export default function Luna() {
     } catch (e) {
       const status = e?.response?.status;
       const detail = e?.response?.data?.detail || "";
-      const msg = status === 415
+      const msg = quotaMessage(e) || (status === 415
         ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, zip olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, or zip).")
         : status === 413 && detail.includes("fazla")
         ? t("En fazla 10 dosya birden gönderebilirsin.", "You can send at most 10 files at once.")
         : status === 413
         ? t("Dosyalardan biri çok büyük.", "One of the files is too large.")
-        : t("🌙 Dosyaları işlerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem with those files. Could you try again?");
+        : t("🌙 Dosyaları işlerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem with those files. Could you try again?"));
       toast.error(msg, { duration: 6000 });
     } finally {
       setSending(false);
@@ -369,10 +402,8 @@ export default function Luna() {
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, imageUrl, mode };
       setMessages((m) => [...m, lunaMsg]);
     } catch (e) {
-      const status = e?.response?.status;
-      const msg = status === 429
-        ? t("Günlük görsel/mesaj hakkın doldu.", "You've used up today's image/message quota.")
-        : t("🌙 Görseli çizerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem drawing that. Could you try again?");
+      const msg = quotaMessage(e)
+        || t("🌙 Görseli çizerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem drawing that. Could you try again?");
       toast.error(msg, { duration: 6000 });
     } finally {
       setGeneratingImage(false);
@@ -400,7 +431,7 @@ export default function Luna() {
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, fileUrl, fileName, mode };
       setMessages((m) => [...m, lunaMsg]);
     } catch (e) {
-      toast.error(t("🌙 Oluştururken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem generating that. Could you try again?"), { duration: 6000 });
+      toast.error(quotaMessage(e) || t("🌙 Oluştururken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem generating that. Could you try again?"), { duration: 6000 });
     } finally {
       setGeneratingDoc(false);
     }
@@ -539,6 +570,15 @@ export default function Luna() {
           lastLunaId={[...messages].reverse().find((m) => m.role === "luna")?.id}
           onToggleMic={toggleMic}
           onClose={endCall}
+        />
+      )}
+
+      {termsProfile && (
+        <TermsGate
+          lang={lang}
+          currentVersion={termsProfile.terms_current_version}
+          initialConsent={!!termsProfile.special_data_consent}
+          onAccepted={() => setTermsProfile(null)}
         />
       )}
     </div>

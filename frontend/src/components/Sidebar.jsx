@@ -129,7 +129,7 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
         <div className="flex items-center gap-2 text-sm font-semibold text-white mb-1">
           <Crown size={15} className="text-amber-300" /> Luna Premium
         </div>
-        <p className="text-[11px] text-white/50 mb-2">Sınırsız sohbet, gelişmiş anılar ve daha fazlası.</p>
+        <p className="text-[11px] text-white/50 mb-2">{t("Günlük mesaj sınırı yok, daha yüksek kullanım kotası.", "No daily message limit, a higher usage quota.")}</p>
         <span data-testid="sidebar-premium-button"
           className="w-full flex items-center justify-between text-xs font-semibold text-purple-200">
           {t("Detaylar", "Details")} <ChevronRight size={13} />

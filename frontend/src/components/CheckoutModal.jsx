@@ -20,7 +20,10 @@ function formatCardNumber(value) {
   return digits.replace(/(.{4})/g, "$1 ").trim();
 }
 
-export default function CheckoutModal({ lang, formFields, onClose }) {
+// `order` (optional) = { name, price } — the plan being bought and its
+// already-formatted monthly price, repeated here so the total is visible
+// right where the user takes on the payment obligation.
+export default function CheckoutModal({ lang, formFields, order, onClose }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
   const [ccOwner, setCcOwner] = useState("");
   const [cardNumber, setCardNumber] = useState("");
@@ -55,6 +58,16 @@ export default function CheckoutModal({ lang, formFields, onClose }) {
             <X size={16} />
           </button>
         </div>
+
+        {order && (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-purple-400/15 px-3 py-2 mb-3"
+            data-testid="checkout-order-summary">
+            <span className="text-xs text-white/70 min-w-0 truncate">{order.name}</span>
+            <span className="text-xs font-semibold text-white whitespace-nowrap">
+              {order.price} <span className="text-[10px] font-normal text-white/45">{t("(tüm vergiler dahil)", "(all taxes included)")}</span>
+            </span>
+          </div>
+        )}
 
         <form method="POST" action={formFields?.action_url} onSubmit={handleSubmit} data-testid="checkout-card-form">
           {/* Signed, non-card fields the backend already computed (paytr_token,
@@ -110,8 +123,14 @@ export default function CheckoutModal({ lang, formFields, onClose }) {
           <button type="submit" disabled={!canSubmit} data-testid="checkout-submit-button"
             className="w-full mt-4 py-2.5 rounded-full text-xs font-semibold text-white disabled:opacity-50 flex items-center justify-center gap-1.5"
             style={{ background: "linear-gradient(90deg,#6366f1,#e879f9)" }}>
-            <Lock size={12} /> {submitting ? t("Yönlendiriliyor...", "Redirecting...") : t("Şimdi Öde", "Pay Now")}
+            <Lock size={12} /> {submitting ? t("Yönlendiriliyor...", "Redirecting...") : t("Siparişi onayla ve öde", "Confirm order and pay")}
           </button>
+          {/* 2026-09-30: right before the order the user must be told clearly
+              that it creates a payment obligation, otherwise they're not bound
+              by it (Mesafeli Sözleşmeler Yön. m.8/1, 6502 m.48/2). */}
+          <p className="text-[10px] text-white/50 text-center mt-2">
+            {t("Bu işlem ödeme yükümlülüğü doğurur.", "This creates an obligation to pay.")}
+          </p>
         </form>
 
         <p className="text-[10px] text-white/35 text-center mt-3">

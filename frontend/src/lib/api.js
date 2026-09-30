@@ -538,6 +538,24 @@ export async function fetchUsage() {
   return res.data;
 }
 
+// ---- Hesap ----
+// Permanently deletes the account and everything tied to it (backend
+// routers/account.py::delete_account). On success this browser is signed
+// out right here, before anything else can run: the stored device
+// credentials now point at a user that no longer exists, and the caller
+// must NOT make any further API call after this resolves — with the
+// credentials gone, getCredentials() would silently mint a brand-new
+// anonymous account. Just redirect away. luna_mode/luna_mood belonged to
+// the deleted account too; luna_lang is a device preference and stays.
+export async function deleteAccount() {
+  const headers = await authHeaders();
+  const res = await axios.delete(`${API}/account`, { headers });
+  signOut();
+  localStorage.removeItem("luna_mode");
+  localStorage.removeItem("luna_mood");
+  return res.data; // { ok, deleted }
+}
+
 // ---- Premium / Abonelik ----
 export async function fetchSubscription() {
   const headers = await authHeaders();
@@ -555,7 +573,16 @@ export async function selectPlan(plan) {
 // form_fields are the signed, card-free fields components/CheckoutModal.jsx
 // posts directly to PayTR alongside the raw card fields the user types —
 // this backend call never sees or handles card data.
-export async function checkoutSubscription(plan, billing) {
+//
+// 2026-09-30: `acceptance` carries the two checkout confirmations the user
+// ticked in the billing form (Ön Bilgilendirme Formu + Mesafeli Satış
+// Sözleşmesi read, and immediate start / cayma hakkı waiver). The backend
+// rejects the checkout (400) unless both are true and sales_docs_version
+// matches its settings.SALES_DOCS_VERSION, then records them in
+// legal_records. Omitting `acceptance` sends false — never a silent "yes".
+export const SALES_DOCS_VERSION = "2026-09-30";
+
+export async function checkoutSubscription(plan, billing, acceptance = {}) {
   const headers = await authHeaders();
   const res = await axios.post(`${API}/subscription/checkout`, {
     plan,
@@ -564,6 +591,9 @@ export async function checkoutSubscription(plan, billing) {
     email: billing.email,
     phone: billing.phone,
     address: billing.address,
+    preinfo_accepted: acceptance.preinfo_accepted === true,
+    instant_start_accepted: acceptance.instant_start_accepted === true,
+    sales_docs_version: acceptance.sales_docs_version || SALES_DOCS_VERSION,
   }, { headers });
   return res.data;
 }

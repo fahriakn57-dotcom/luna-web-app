@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
-import { X, Globe, Smartphone, Trash2, Settings as SettingsIcon, User, Sparkles, LogOut, MessageCircle, Mail } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { X, Globe, Smartphone, Trash2, Settings as SettingsIcon, User, Sparkles, LogOut, MessageCircle, Mail, ShieldCheck, UserX } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
-import { fetchProfile, updateProfile, signOut } from "@/lib/api";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import { accountDeletionBody, consentWithdrawalBody } from "@/lib/legalCopy";
+import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
+import { fetchProfile, updateProfile, signOut, deleteAccount } from "@/lib/api";
 import { LANGUAGES } from "@/lib/languages";
 
 const TONES = [
@@ -46,6 +49,15 @@ export default function SettingsPanel({
   const [replyLangOpen, setReplyLangOpen] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
   const [backupEnabled, setBackupEnabled] = useState(false);
+  const [specialConsent, setSpecialConsent] = useState(false);
+  const [consentSaving, setConsentSaving] = useState(false);
+  // Which destructive confirmation is open: "consent" (withdrawing the
+  // special-category consent) | "memories" | "account" | null.
+  const [confirming, setConfirming] = useState(null);
+  const [clearingMemories, setClearingMemories] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [accountDeleted, setAccountDeleted] = useState(false);
+  const consentSwitchId = useId();
 
   useEffect(() => {
     fetchProfile().then((p) => {
@@ -55,6 +67,7 @@ export default function SettingsPanel({
       setReplyLang(p.language || "tr");
       setEmailVerified(!!p.email_verified);
       setBackupEnabled(!!p.backup_email_enabled);
+      setSpecialConsent(!!p.special_data_consent);
     }).catch(() => {});
   }, []);
 
@@ -67,6 +80,65 @@ export default function SettingsPanel({
     } catch (e) {
       setBackupEnabled(!next);
       toast.error(e?.response?.data?.detail || t("Kaydedilemedi", "Couldn't save"));
+    }
+  };
+
+  // Same optimistic/rollback shape as toggleBackup. Withdrawing (on → off)
+  // is destructive on the backend (special-flagged memories and the AI
+  // daily/monthly summaries are deleted), so that direction goes through a
+  // confirmation first; granting saves straight away.
+  const saveSpecialConsent = async (next) => {
+    setSpecialConsent(next);
+    setConsentSaving(true);
+    try {
+      const p = await updateProfile({ special_data_consent: next });
+      setSpecialConsent(typeof p?.special_data_consent === "boolean" ? p.special_data_consent : next);
+      toast.success(next
+        ? t("Açık rızan kaydedildi", "Consent saved")
+        : t("Açık rızan geri alındı", "Consent withdrawn"));
+    } catch (e) {
+      setSpecialConsent(!next);
+      toast.error(e?.response?.data?.detail || t("Kaydedilemedi", "Couldn't save"));
+    } finally {
+      setConsentSaving(false);
+      setConfirming(null);
+    }
+  };
+
+  const toggleSpecialConsent = (next) => {
+    if (!next && specialConsent) {
+      setConfirming("consent");
+      return;
+    }
+    saveSpecialConsent(next);
+  };
+
+  const confirmClearMemories = async () => {
+    setClearingMemories(true);
+    try {
+      // Luna.jsx's handler closes this panel and toasts on success.
+      await onClearMemories();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || t("Anılar silinemedi, tekrar dene.", "Couldn't delete memories, try again."));
+    } finally {
+      setClearingMemories(false);
+      setConfirming(null);
+    }
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (deletingAccount) return;
+    setDeletingAccount(true);
+    try {
+      // deleteAccount() also signs this browser out — nothing below may
+      // call the API again (see its comment in api.js), only redirect.
+      await deleteAccount();
+      setAccountDeleted(true);
+      toast.success(t("Hesabın ve tüm verilerin silindi. Hoşça kal 💜", "Your account and all its data were deleted. Goodbye 💜"));
+      setTimeout(() => { window.location.href = "/"; }, 1800);
+    } catch (e) {
+      setDeletingAccount(false);
+      toast.error(e?.response?.data?.detail || t("Hesabın silinemedi, tekrar dene.", "Couldn't delete your account, try again."));
     }
   };
 
@@ -234,20 +306,94 @@ export default function SettingsPanel({
 
         <div className="rounded-2xl p-4 mb-4" style={{ backgroundColor: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.15)" }}>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-red-300/60 mb-3">{t("Gizlilik ve Veri", "Privacy & Data")}</p>
+
+          <div className="pb-3 mb-2 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between gap-3">
+              <label htmlFor={consentSwitchId} className="flex items-center gap-2.5 text-sm text-white/85 cursor-pointer">
+                <ShieldCheck size={15} className="text-purple-300 shrink-0" />
+                {t("Özel nitelikli veriler için açık rıza", "Explicit consent for special-category data")}
+              </label>
+              <Switch id={consentSwitchId} checked={specialConsent} onCheckedChange={toggleSpecialConsent}
+                disabled={consentSaving} data-testid="settings-special-consent-toggle" />
+            </div>
+            <p className="text-[11px] text-white/40 leading-relaxed mt-1.5 pl-[25px]">
+              {t(
+                "Açıksa Luna, sohbetlerinde paylaştığın sağlık, inanç gibi bilgileri hafızasına kaydedebilir. Kapalıysa kaydetmez.",
+                "When on, Luna may save information you share in chats, such as health or beliefs, to its memory. When off, it doesn't."
+              )}{" "}
+              <LegalLink href={LEGAL_URLS.consent} className="text-purple-300/90 hover:text-purple-200">
+                {t("Açık Rıza Metni", "Explicit Consent Notice")}
+              </LegalLink>
+            </p>
+          </div>
+
           <button data-testid="settings-clear-chat" onClick={onClearChat}
             className="w-full flex items-center gap-2.5 text-sm text-red-300/85 hover:text-red-200 transition-colors py-1.5">
             <Trash2 size={15} /> {t("Sohbet geçmişini temizle", "Clear chat history")}
           </button>
-          <button data-testid="settings-clear-memories" onClick={onClearMemories}
+          <button data-testid="settings-clear-memories" onClick={() => setConfirming("memories")}
             className="w-full flex items-center gap-2.5 text-sm text-red-300/85 hover:text-red-200 transition-colors py-1.5">
             <Trash2 size={15} /> {t("Tüm anıları sil", "Clear all memories")}
           </button>
+          <button data-testid="settings-delete-account" onClick={() => setConfirming("account")}
+            className="w-full flex items-center gap-2.5 text-sm font-semibold text-red-300/85 hover:text-red-200 transition-colors py-1.5">
+            <UserX size={15} /> {t("Hesabımı sil", "Delete my account")}
+          </button>
+
+          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-white/40 mt-3 pt-3 border-t border-white/[0.06]">
+            <LegalLink href={LEGAL_URLS.terms}>{t("Kullanım Şartları", "Terms of Use")}</LegalLink>
+            <span aria-hidden="true">·</span>
+            <LegalLink href={LEGAL_URLS.privacy}>{t("Gizlilik Politikası", "Privacy Policy")}</LegalLink>
+            <span aria-hidden="true">·</span>
+            <LegalLink href={LEGAL_URLS.kvkk}>{t("KVKK Aydınlatma Metni", "KVKK Privacy Notice")}</LegalLink>
+          </p>
         </div>
 
         <button onClick={handleSignOut} data-testid="settings-sign-out"
           className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-white/40 hover:text-white transition-colors py-2">
           <LogOut size={14} /> {t("Bu cihazdan çıkış yap", "Sign out of this device")}
         </button>
+
+        <ConfirmDialog
+          open={confirming === "consent"}
+          danger
+          busy={consentSaving}
+          title={t("Açık rızanı geri almak istiyor musun?", "Withdraw your consent?")}
+          body={consentWithdrawalBody(t)}
+          confirmLabel={t("İznimi geri al", "Withdraw consent")}
+          cancelLabel={t("Vazgeç", "Cancel")}
+          onConfirm={() => saveSpecialConsent(false)}
+          onCancel={() => setConfirming(null)}
+        />
+
+        <ConfirmDialog
+          open={confirming === "memories"}
+          danger
+          busy={clearingMemories}
+          title={t("Tüm anıları silmek istiyor musun?", "Delete all memories?")}
+          body={t(
+            "Tüm anıların kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+            "All your memories will be permanently deleted. This can't be undone."
+          )}
+          confirmLabel={t("Tümünü sil", "Delete all")}
+          cancelLabel={t("Vazgeç", "Cancel")}
+          onConfirm={confirmClearMemories}
+          onCancel={() => setConfirming(null)}
+        />
+
+        <ConfirmDialog
+          open={confirming === "account"}
+          danger
+          busy={deletingAccount}
+          title={t("Hesabını silmek istiyor musun?", "Delete your account?")}
+          body={accountDeletionBody(t)}
+          confirmLabel={accountDeleted
+            ? t("Hesabın silindi, yönlendiriliyorsun...", "Account deleted, redirecting...")
+            : t("Hesabımı kalıcı olarak sil", "Permanently delete my account")}
+          cancelLabel={t("Vazgeç", "Cancel")}
+          onConfirm={confirmDeleteAccount}
+          onCancel={() => setConfirming(null)}
+        />
       </div>
     </div>
   );

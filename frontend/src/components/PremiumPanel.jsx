@@ -1,27 +1,58 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { X, Crown, Check, Sparkles, ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
-import { fetchSubscription, selectPlan, checkoutSubscription, cancelSubscription, fetchProfile } from "@/lib/api";
+import { fetchSubscription, selectPlan, checkoutSubscription, cancelSubscription, fetchProfile, SALES_DOCS_VERSION } from "@/lib/api";
 import CheckoutModal from "@/components/CheckoutModal";
+import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
 
 // 2026-09-27: PayTR only needs these five (no TC Kimlik No / city — those
 // were an iyzico-specific fraud-check requirement, see git history).
 const EMPTY_BILLING = { name: "", surname: "", email: "", phone: "", address: "" };
+
+// Turkish price format: 199.9 -> "₺199,90" (a raw JS number would render
+// "₺199.9"). A free plan (price_try 0) is just "₺0". Plans without a TRY
+// price fall back to the old USD display.
+function formatPlanPrice(plan) {
+  if (plan.price_try == null) return `$${plan.price_usd}`;
+  if (plan.price_try === 0) return "₺0";
+  return `₺${Number(plan.price_try).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
 
 export default function PremiumPanel({ lang, onClose }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
   const [catalog, setCatalog] = useState([]);
   const [current, setCurrent] = useState({ plan: "free", status: "active" });
   const [loading, setLoading] = useState(true);
+  // Paid checkout stays closed until the seller details are on the sales
+  // documents (backend LUNA_PAID_SALES_ENABLED). An older backend without
+  // the field counts as open, like before.
+  const [salesEnabled, setSalesEnabled] = useState(true);
   const [selecting, setSelecting] = useState(null);
   const [cancelling, setCancelling] = useState(false);
   const [billingPlan, setBillingPlan] = useState(null); // plan id currently filling the billing form for
   const [billing, setBilling] = useState(EMPTY_BILLING);
   const [checkoutFields, setCheckoutFields] = useState(null);
+  const [checkoutPlan, setCheckoutPlan] = useState(null); // plan shown in CheckoutModal's order line
+  // 2026-09-30: the two checkout confirmations (Mesafeli Sözleşmeler Yön.).
+  // Own state, NOT inside `billing` — handleBillingSubmit .trim()s every
+  // billing value, which would crash on a boolean. Both start unticked and
+  // reset whenever a plan is picked, since they confirm that plan's price.
+  const [preinfoAccepted, setPreinfoAccepted] = useState(false);
+  const [instantStartAccepted, setInstantStartAccepted] = useState(false);
+  const preinfoId = useId();
+  const instantStartId = useId();
+  const selectedPlan = catalog.find((p) => p.id === billingPlan);
+  // A cancelled / failed / unpaid subscription keeps its `plan` field, but
+  // the account is on Free then (and may pick that paid plan again).
+  const currentPlanId = current.status === "active" ? current.plan : "free";
 
   useEffect(() => {
     fetchSubscription()
-      .then(({ subscription, catalog }) => { setCurrent(subscription); setCatalog(catalog); })
+      .then(({ subscription, catalog, sales_enabled }) => {
+        setCurrent(subscription);
+        setCatalog(catalog);
+        setSalesEnabled(sales_enabled !== false);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
     // Only `name` is available from the profile — Luna's account model
@@ -34,11 +65,15 @@ export default function PremiumPanel({ lang, onClose }) {
   }, []);
 
   const refreshSubscription = () => {
-    fetchSubscription().then(({ subscription, catalog }) => { setCurrent(subscription); setCatalog(catalog); }).catch(() => {});
+    fetchSubscription().then(({ subscription, catalog, sales_enabled }) => {
+      setCurrent(subscription);
+      setCatalog(catalog);
+      setSalesEnabled(sales_enabled !== false);
+    }).catch(() => {});
   };
 
   const handleSelect = async (planId) => {
-    if (planId === current.plan) return;
+    if (planId === currentPlanId) return;
     if (planId === "free") {
       setSelecting(planId);
       try {
@@ -52,6 +87,8 @@ export default function PremiumPanel({ lang, onClose }) {
       }
       return;
     }
+    setPreinfoAccepted(false);
+    setInstantStartAccepted(false);
     setBillingPlan(planId);
   };
 
@@ -62,10 +99,19 @@ export default function PremiumPanel({ lang, onClose }) {
       toast.error(t("Tüm alanları doldurman gerekiyor.", "All fields are required."));
       return;
     }
+    if (!preinfoAccepted || !instantStartAccepted) {
+      toast.error(t("Devam etmek için sözleşme onaylarını vermelisin.", "To continue, please tick both confirmations."));
+      return;
+    }
     setSelecting(billingPlan);
     try {
-      const { form_fields } = await checkoutSubscription(billingPlan, billing);
+      const { form_fields } = await checkoutSubscription(billingPlan, billing, {
+        preinfo_accepted: preinfoAccepted,
+        instant_start_accepted: instantStartAccepted,
+        sales_docs_version: SALES_DOCS_VERSION,
+      });
       if (!form_fields) throw new Error("no checkout form");
+      setCheckoutPlan(selectedPlan || null);
       setCheckoutFields(form_fields);
       setBillingPlan(null);
     } catch (e) {
@@ -132,6 +178,61 @@ export default function PremiumPanel({ lang, onClose }) {
             <input required value={billing.address} onChange={(e) => setBilling((b) => ({ ...b, address: e.target.value }))}
               placeholder={t("Adres", "Address")} data-testid="billing-address-input"
               className="w-full mt-2.5 bg-black/25 outline-none px-3 py-2 rounded-lg border border-purple-400/20 focus:border-purple-400 text-sm text-white placeholder:text-white/30" />
+
+            {/* 2026-09-30: order summary + the two separate confirmations the
+                backend requires (Mesafeli Sözleşmeler Yön. m.5 ön bilgilendirme,
+                m.15/1-ğ/h cayma istisnası) — shown BEFORE the user commits. */}
+            {selectedPlan && (
+              <div className="mt-4 rounded-2xl border border-purple-400/20 p-3.5" data-testid="billing-order-summary"
+                style={{ backgroundColor: "rgba(139,92,246,0.08)" }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-white/40">{t("Seçilen paket", "Selected plan")}</p>
+                    <p className="text-sm font-semibold text-white">{selectedPlan.name}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-bold text-white" data-testid="billing-order-price">
+                      {formatPlanPrice(selectedPlan)} / {t("ay", "mo")}
+                    </p>
+                    <p className="text-[10px] text-white/45">{t("(tüm vergiler dahil)", "(all taxes included)")}</p>
+                  </div>
+                </div>
+                {selectedPlan.features?.length > 0 && (
+                  <p className="text-[10px] text-white/50 leading-snug mt-2">{selectedPlan.features.join(" · ")}</p>
+                )}
+                <p className="text-[11px] text-white/60 leading-snug mt-2.5">
+                  {t("Belirsiz süreli abonelik; her ay otomatik yenilenir, dilediğin zaman uygulamadan iptal edebilirsin.",
+                    "Open-ended subscription; it renews automatically every month and you can cancel it in the app anytime.")}
+                </p>
+                <p className="text-[11px] text-white/60 leading-snug mt-1.5">
+                  {t("Hizmet onayınla hemen başladığı için cayma hakkın bulunmaz (Mesafeli Sözleşmeler Yönetmeliği m.15/1-ğ, h).",
+                    "Because the service starts immediately with your approval, you have no right of withdrawal (Turkish Distance Contracts Regulation art. 15/1-ğ, h).")}
+                </p>
+              </div>
+            )}
+            <div className="mt-3 space-y-2.5">
+              <div className="flex items-start gap-2.5">
+                <input id={preinfoId} type="checkbox" checked={preinfoAccepted} onChange={(e) => setPreinfoAccepted(e.target.checked)}
+                  aria-required="true" data-testid="billing-preinfo-checkbox"
+                  className="accent-purple-400 mt-0.5 h-4 w-4 shrink-0 cursor-pointer" />
+                <label htmlFor={preinfoId} className="text-[11px] text-white/75 leading-snug cursor-pointer">
+                  {t(
+                    <><LegalLink href={LEGAL_URLS.preinfo} className="text-purple-300 hover:text-purple-200">Ön Bilgilendirme Formu</LegalLink>'nu ve <LegalLink href={LEGAL_URLS.salesContract} className="text-purple-300 hover:text-purple-200">Mesafeli Satış Sözleşmesi</LegalLink>'ni okudum, onaylıyorum.</>,
+                    <>I have read and accept the <LegalLink href={LEGAL_URLS.preinfo} className="text-purple-300 hover:text-purple-200">Preliminary Information Form</LegalLink> and the <LegalLink href={LEGAL_URLS.salesContract} className="text-purple-300 hover:text-purple-200">Distance Sales Agreement</LegalLink>.</>
+                  )}
+                </label>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <input id={instantStartId} type="checkbox" checked={instantStartAccepted} onChange={(e) => setInstantStartAccepted(e.target.checked)}
+                  aria-required="true" data-testid="billing-instant-start-checkbox"
+                  className="accent-purple-400 mt-0.5 h-4 w-4 shrink-0 cursor-pointer" />
+                <label htmlFor={instantStartId} className="text-[11px] text-white/75 leading-snug cursor-pointer">
+                  {t("Hizmetin cayma süresi dolmadan hemen başlatılmasını onaylıyorum; bu nedenle cayma hakkımı kaybedeceğimi biliyorum.",
+                    "I agree that the service starts immediately, before the withdrawal period ends, and I understand that I therefore lose my right of withdrawal.")}
+                </label>
+              </div>
+            </div>
+
             <button type="submit" disabled={selecting === billingPlan} data-testid="billing-submit-button"
               className="w-full mt-4 py-2.5 rounded-full text-xs font-semibold text-white disabled:opacity-60"
               style={{ background: "linear-gradient(90deg,#6366f1,#e879f9)" }}>
@@ -142,10 +243,17 @@ export default function PremiumPanel({ lang, onClose }) {
           <p className="text-sm text-white/40 text-center py-10">{t("Yükleniyor...", "Loading...")}</p>
         ) : (
           <>
-            <div className="grid sm:grid-cols-3 gap-4">
+            {!salesEnabled && (
+              <p className="text-center text-xs text-white/60 mb-5" data-testid="premium-sales-closed">
+                {t("Ücretli paket satışı yakında başlayacak. Şimdilik Luna'yı ücretsiz kullanabilirsin.",
+                  "Paid plans will be available soon. For now you can use Luna for free.")}
+              </p>
+            )}
+            <div className="grid sm:grid-cols-2 gap-4 gap-y-6">
               {catalog.map((plan) => {
-                const isCurrent = current.plan === plan.id;
+                const isCurrent = currentPlanId === plan.id;
                 const isPlus = plan.id === "premium_plus";
+                const comingSoon = !salesEnabled && plan.id !== "free" && !isCurrent;
                 return (
                   <div key={plan.id} data-testid={`plan-card-${plan.id}`}
                     className="rounded-3xl border p-5 flex flex-col relative"
@@ -156,15 +264,15 @@ export default function PremiumPanel({ lang, onClose }) {
                     }}>
                     {isPlus && (
                       <span className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 text-[10px] font-bold px-3 py-1 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white">
-                        <Sparkles size={10} /> {t("EN POPÜLER", "MOST POPULAR")}
+                        <Sparkles size={10} /> {t("ÖNERİLEN", "RECOMMENDED")}
                       </span>
                     )}
                     <h3 className="text-sm font-bold text-white mt-2">{plan.name}</h3>
                     <div className="flex items-end gap-1 my-3">
                       <span className="text-3xl font-extrabold text-white">
-                        {plan.price_try ? `₺${plan.price_try}` : `$${plan.price_usd}`}
+                        {formatPlanPrice(plan)}
                       </span>
-                      {plan.price_usd > 0 && <span className="text-xs text-white/40 mb-1">/{t("ay", "mo")}</span>}
+                      {(plan.price_try ?? plan.price_usd) > 0 && <span className="text-xs text-white/40 mb-1">/{t("ay", "mo")}</span>}
                     </div>
                     <ul className="space-y-2 mb-5 flex-1">
                       {plan.features.map((f) => (
@@ -173,7 +281,7 @@ export default function PremiumPanel({ lang, onClose }) {
                         </li>
                       ))}
                     </ul>
-                    <button onClick={() => handleSelect(plan.id)} disabled={isCurrent || selecting === plan.id}
+                    <button onClick={() => handleSelect(plan.id)} disabled={isCurrent || comingSoon || selecting === plan.id}
                       data-testid={`plan-select-${plan.id}`}
                       className="w-full py-2.5 rounded-full text-xs font-semibold transition-all disabled:opacity-60"
                       style={isCurrent
@@ -182,6 +290,7 @@ export default function PremiumPanel({ lang, onClose }) {
                           ? { background: "linear-gradient(90deg,#6366f1,#e879f9)", color: "#fff" }
                           : { border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}>
                       {isCurrent ? t("Mevcut Plan ✓", "Current Plan ✓")
+                        : comingSoon ? t("Yakında", "Coming soon")
                         : selecting === plan.id ? t("Hazırlanıyor...", "Preparing...")
                         : plan.id === "free" ? t("Free'ye Geç", "Switch to Free") : t("Bu Planı Seç", "Choose Plan")}
                     </button>
@@ -217,7 +326,8 @@ export default function PremiumPanel({ lang, onClose }) {
 
       {checkoutFields && (
         <CheckoutModal lang={lang} formFields={checkoutFields}
-          onClose={() => { setCheckoutFields(null); refreshSubscription(); }} />
+          order={checkoutPlan && { name: checkoutPlan.name, price: `${formatPlanPrice(checkoutPlan)} / ${t("ay", "mo")}` }}
+          onClose={() => { setCheckoutFields(null); setCheckoutPlan(null); refreshSubscription(); }} />
       )}
     </div>
   );

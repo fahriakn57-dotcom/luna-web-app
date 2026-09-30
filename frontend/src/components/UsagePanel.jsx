@@ -2,6 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { X, Gauge, RefreshCw } from "lucide-react";
 import { fetchUsage } from "@/lib/api";
 
+// /api/usage returns the internal config.PLANS keys; show the names the user
+// actually bought (the Premium card used to read "Plus", Premium Plus "Pro").
+const PLAN_LABELS = { free: "Free", plus: "Premium", pro: "Premium Plus", ultra: "Premium Ultra", unlimited: "Unlimited" };
+
 // Same "Günlük Kullanım" card that used to live in FriendPanel's right
 // column — now its own sidebar-reachable panel so it's available on mobile
 // too (the right column never showed there).
@@ -38,7 +42,23 @@ export default function UsagePanel({ lang, onClose }) {
     if (!u) return null;
     const unlimited = u.limit >= 10 ** 9;
     const pct = unlimited ? 0 : Math.min(100, Math.round((u.used / Math.max(u.limit, 1)) * 100));
-    return { key, label, unlimited, pct, used: u.used, limit: u.limit };
+    // Paid plans have no DAILY cap but do have the weekly/30-day quota
+    // rows below — so "no daily limit", never "unlimited".
+    const value = unlimited ? t("Günlük sınır yok", "No daily limit") : `${u.used} / ${u.limit} · %${pct}`;
+    return { key, label, unlimited, pct, value };
+  }).filter(Boolean) : [];
+
+  // Paid plans' rolling fair-use quota (usage_service.summary -> cost_try:
+  // {week|month: {spent, limit}} in TRY). Shown only as a percentage; the
+  // whole block is absent for free/unlimited, and a malformed window is skipped.
+  const quotaRows = usage?.cost_try ? [
+    { key: "week", label: t("Haftalık kota", "Weekly quota") },
+    { key: "month", label: t("30 günlük kota", "30-day quota") },
+  ].map(({ key, label }) => {
+    const q = usage.cost_try[key];
+    if (!q || typeof q.spent !== "number" || !(q.limit > 0)) return null;
+    const pct = Math.min(100, Math.round((q.spent / q.limit) * 100));
+    return { key: `quota-${key}`, label, unlimited: false, pct, value: `%${pct}` };
   }).filter(Boolean) : [];
 
   return (
@@ -49,7 +69,7 @@ export default function UsagePanel({ lang, onClose }) {
         style={{ backgroundColor: "#0c0818", boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="flex items-center gap-2 text-base font-bold text-white">
-            <Gauge size={17} className="text-emerald-300" /> {t("Günlük Kullanım", "Daily Usage")}
+            <Gauge size={17} className="text-emerald-300" /> {t("Kullanım", "Usage")}
           </h2>
           <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5">
             <X size={16} />
@@ -78,11 +98,11 @@ export default function UsagePanel({ lang, onClose }) {
           </div>
         ) : (
           <div className="space-y-4">
-            {rows.map(({ key, label, unlimited, pct, used, limit }) => (
-              <div key={key}>
+            {[...rows, ...quotaRows].map(({ key, label, unlimited, pct, value }) => (
+              <div key={key} data-testid={`usage-row-${key}`}>
                 <div className="flex items-center justify-between text-xs text-white/70 mb-1.5">
                   <span className="font-medium">{label}</span>
-                  <span className="font-mono text-white/45">{unlimited ? t("Sınırsız", "Unlimited") : `${used} / ${limit} · %${pct}`}</span>
+                  <span className="font-mono text-white/45">{value}</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
                   <div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-fuchsia-400 transition-all"
@@ -92,7 +112,7 @@ export default function UsagePanel({ lang, onClose }) {
             ))}
             <div className="pt-3 mt-1 border-t border-white/10 flex items-center justify-between">
               <span className="text-[11px] text-white/35">{t("Plan", "Plan")}</span>
-              <span className="text-[11px] font-semibold text-purple-200 capitalize">{usage.plan}</span>
+              <span className="text-[11px] font-semibold text-purple-200 capitalize">{PLAN_LABELS[usage.plan] || usage.plan}</span>
             </div>
           </div>
         )}

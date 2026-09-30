@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Mail, ArrowRight, Loader2, Lock, ShieldCheck, Fingerprint, User, ChevronDown, Globe } from "lucide-react";
 import accountGateBg from "@/assets/account-gate.png";
-import { signupWithEmail, loginWithEmail, loginWithGoogle, forgotPassword } from "@/lib/api";
+import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
+import { signupWithEmail, loginWithEmail, loginWithGoogle, forgotPassword, fetchProfile, updateProfile } from "@/lib/api";
 
 // Google Identity Services Client ID — public by design (Google's own docs:
 // this is not a secret, only server-side ID-token verification is
@@ -67,8 +68,13 @@ function GoogleButtonSlot({ t, googleAvailable, onGoogleClick, extraClass = "" }
   );
 }
 
-function GateCard({ lang, setLang, view, setView, email, setEmail, password, setPassword, loading, googleAvailable, onGoogleClick, onSubmit, onOpenForgot, onForgotSubmit, forgotSent }) {
+function GateCard({ lang, setLang, view, setView, email, setEmail, password, setPassword, loading, googleAvailable, onGoogleClick, onSubmit, onOpenForgot, onForgotSubmit, forgotSent, termsAccepted, setTermsAccepted, specialConsent, setSpecialConsent }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
+  // GateCard is mounted twice at once (desktop + mobile layouts, one of them
+  // hidden by CSS) — useId keeps each copy's checkbox ids unique so every
+  // <label htmlFor> points at its own card's input.
+  const termsId = useId();
+  const consentId = useId();
 
   return (
     <>
@@ -152,7 +158,46 @@ function GateCard({ lang, setLang, view, setView, email, setEmail, password, set
                 className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30" />
             </div>
 
-            <button type="submit" disabled={loading} data-testid="gate-submit-button"
+            {view === "signup" && (
+              <>
+                <div className="flex items-start gap-2.5 px-1 pt-1">
+                  <input id={termsId} type="checkbox" checked={termsAccepted} onChange={(e) => setTermsAccepted(e.target.checked)}
+                    data-testid="gate-terms-checkbox"
+                    className="accent-purple-400 mt-0.5 h-4 w-4 shrink-0 cursor-pointer" />
+                  <label htmlFor={termsId} className="text-[11px] text-white/70 leading-snug cursor-pointer">
+                    {t(
+                      <>18 yaşını doldurdum; <LegalLink href={LEGAL_URLS.terms} className="text-indigo-300 hover:text-white">Kullanım Şartları</LegalLink>'nı okudum ve kabul ediyorum.</>,
+                      <>I am 18 or older, and I have read and accept the <LegalLink href={LEGAL_URLS.terms} className="text-indigo-300 hover:text-white">Terms of Use</LegalLink>.</>
+                    )}
+                  </label>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2.5">
+                  <p lang={lang === "tr" ? "tr" : "en"} className="text-[9px] font-semibold uppercase tracking-wide text-indigo-300/70 mb-1.5">
+                    {t("Açık rıza (isteğe bağlı)", "Explicit consent (optional)")}
+                  </p>
+                  <div className="flex items-start gap-2.5">
+                    <input id={consentId} type="checkbox" checked={specialConsent} onChange={(e) => setSpecialConsent(e.target.checked)}
+                      data-testid="gate-consent-checkbox"
+                      className="accent-purple-400 mt-0.5 h-4 w-4 shrink-0 cursor-pointer" />
+                    <label htmlFor={consentId} className="text-[10px] text-white/60 leading-snug cursor-pointer">
+                      {t(
+                        <>Sohbetlerimde paylaştığım sağlık, inanç gibi özel nitelikli kişisel verilerimin <LegalLink href={LEGAL_URLS.consent} className="text-indigo-300 hover:text-white">Açık Rıza Metni</LegalLink>'nde anlatıldığı şekilde işlenmesine ve Luna'nın bunları hafızasına kaydetmesine açık rıza veriyorum.</>,
+                        <>I give my explicit consent for the special-category personal data I share in my chats, such as health or beliefs, to be processed as described in the <LegalLink href={LEGAL_URLS.consent} className="text-indigo-300 hover:text-white">Explicit Consent Notice</LegalLink>, and for Luna to save it to its memory.</>
+                      )}
+                    </label>
+                  </div>
+                  <p className="text-[9px] text-white/40 leading-snug mt-1.5 pl-[26px]">
+                    {t(
+                      "Vermesen de Luna'yı kullanabilirsin; kararını Ayarlar > Gizlilik ve Veri'den istediğin zaman değiştirebilirsin.",
+                      "You can use Luna without it, and change your decision anytime in Settings > Privacy & Data."
+                    )}
+                  </p>
+                </div>
+              </>
+            )}
+
+            <button type="submit" disabled={loading || (view === "signup" && !termsAccepted)} data-testid="gate-submit-button"
               className="w-full flex items-center justify-center gap-2 rounded-full py-3 text-sm font-semibold transition-transform hover:scale-[1.02] disabled:opacity-60"
               style={{ background: "linear-gradient(90deg,#6366f1,#c084fc)" }}>
               {loading ? <Loader2 size={15} className="animate-spin" /> : (view === "login" ? t("Giriş Yap", "Log In") : t("Hesap Oluştur", "Create Account"))}
@@ -212,7 +257,17 @@ function GateCard({ lang, setLang, view, setView, email, setEmail, password, set
         </>
       )}
 
-      <p className="text-center text-[9px] text-white/25 mt-6">XSF Technology · Luna · {t("Daha iyi bir yarın, seninle.", "A better tomorrow, with you.")}</p>
+      <div className="text-center text-[10px] text-white/40 leading-relaxed mt-6">
+        <p>{t("Luna 18 yaşından büyükler içindir.", "Luna is for adults 18 and over.")}</p>
+        <p className="flex flex-wrap items-center justify-center gap-x-1.5">
+          <LegalLink href={LEGAL_URLS.terms}>{t("Kullanım Şartları", "Terms of Use")}</LegalLink>
+          <span aria-hidden="true">·</span>
+          <LegalLink href={LEGAL_URLS.privacy}>{t("Gizlilik Politikası", "Privacy Policy")}</LegalLink>
+          <span aria-hidden="true">·</span>
+          <LegalLink href={LEGAL_URLS.kvkk}>{t("KVKK Aydınlatma Metni", "KVKK Privacy Notice")}</LegalLink>
+        </p>
+      </div>
+      <p className="text-center text-[9px] text-white/25 mt-2">XSF Technology · Luna · {t("Daha iyi bir yarın, seninle.", "A better tomorrow, with you.")}</p>
     </>
   );
 }
@@ -224,6 +279,10 @@ export default function AccountGate({ lang, setLang, onDone }) {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
+  // Signup-only: the required Kullanım Şartları / 18+ box and the separate,
+  // optional explicit consent for special-category data (KVKK md.6).
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [specialConsent, setSpecialConsent] = useState(false);
   // True once we've given up waiting for GIS (blocked by an ad/privacy
   // blocker, offline, or accounts.google.com unreachable) — read by
   // onGoogleClick below to show a clear message instead of silently
@@ -341,10 +400,26 @@ export default function AccountGate({ lang, setLang, onDone }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email.trim() || !password.trim()) return;
+    if (view === "signup" && !termsAccepted) {
+      toast.error(t("Devam etmek için Kullanım Şartları'nı kabul etmelisin.", "You need to accept the Terms of Use to continue."));
+      return;
+    }
     setLoading(true);
     try {
       if (view === "signup") {
         const res = await signupWithEmail(email.trim(), password);
+        // Record the acceptance (and the optional consent) on the new
+        // account. Best-effort on purpose: the account already exists at
+        // this point, so a failure here must not block entry — Luna.jsx's
+        // TermsGate simply asks again on first load.
+        try {
+          const p = await fetchProfile();
+          if (p?.terms_current_version) {
+            await updateProfile({ accept_terms_version: p.terms_current_version, special_data_consent: specialConsent });
+          }
+        } catch {
+          // ignored — see above
+        }
         toast.success(res.verification_email_sent
           ? t("Hesabın oluşturuldu! Doğrulama e-postasını kontrol et.", "Account created! Check your inbox to verify.")
           : t("Hesabın oluşturuldu!", "Account created!"));
@@ -403,6 +478,7 @@ export default function AccountGate({ lang, setLang, onDone }) {
     googleAvailable: !!GOOGLE_CLIENT_ID, onGoogleClick, onSubmit: handleSubmit,
     onOpenForgot: () => { setForgotSent(false); setView("forgot"); },
     onForgotSubmit: handleForgotSubmit, forgotSent,
+    termsAccepted, setTermsAccepted, specialConsent, setSpecialConsent,
   };
 
   return (
@@ -426,9 +502,12 @@ export default function AccountGate({ lang, setLang, onDone }) {
       </div>
 
       {/* Mobile / tablet: the wide photo doesn't compose well narrow, so just
-          show the card centered on a plain dark background. */}
-      <div className="lg:hidden h-full w-full flex items-center justify-center px-4 py-10 overflow-y-auto">
-        <div className="w-full max-w-md rounded-[28px] border border-white/10 p-7" style={{ backgroundColor: "rgba(10,8,22,0.9)", backdropFilter: "blur(20px)" }}>
+          show the card centered on a plain dark background. my-auto (not
+          items-center) centres it only while it fits — a taller card (signup
+          with the consent boxes) then scrolls from its top instead of being
+          clipped above the viewport. */}
+      <div className="lg:hidden h-full w-full flex justify-center px-4 py-10 overflow-y-auto">
+        <div className="w-full max-w-md my-auto rounded-[28px] border border-white/10 p-7" style={{ backgroundColor: "rgba(10,8,22,0.9)", backdropFilter: "blur(20px)" }}>
           <GateCard {...cardProps} />
         </div>
       </div>
