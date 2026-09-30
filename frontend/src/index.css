@@ -110,6 +110,41 @@ body {
 .call-rise { animation: call-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both; }
 .call-caption { animation: call-caption-in 0.35s ease-out both; }
 .call-spin { animation: call-spin 1.1s linear infinite; }
+/* Moonset: the call screen fades out while the moon sets (useVoiceCall
+   waits CLOSE_ANIMATION_MS before unmounting). */
+@keyframes call-exit {
+    to { opacity: 0; }
+}
+/* Your words, just sent, dim as they drift up toward the moon (into their
+   place — never past the caption box's top edge, which would clip İ/Ü/Ğ). */
+@keyframes call-sent {
+    from { opacity: 1; transform: translateY(8px); }
+    to { opacity: 0.5; transform: none; }
+}
+/* The ring around "Gönder" drains while Luna waits for you to finish. */
+@keyframes call-endpoint {
+    from { stroke-dashoffset: 0; }
+    to { stroke-dashoffset: 100; }
+}
+.call-exit { animation: call-exit 0.42s ease-in forwards; }
+.call-sent { animation: call-sent 0.4s ease-out forwards; }
+.call-endpoint circle { stroke-dasharray: 100; animation: call-endpoint 1.2s linear forwards; }
+/* The call's sky (VoiceCallModal): the chat background, drifting very
+   slowly, tinted by whose turn it is. */
+@keyframes call-sky-drift {
+    from { transform: scale(1.08) translate3d(0, 1.5%, 0); }
+    to { transform: scale(1.02) translate3d(0, 0, 0); }
+}
+.call-sky-image {
+    opacity: 0.85;
+    transition: filter 0.9s ease, opacity 0.9s ease;
+    animation: call-sky-drift 38s ease-in-out infinite alternate;
+    will-change: transform;
+}
+[data-call-state="listening"] .call-sky-image { filter: hue-rotate(-22deg) saturate(0.8) brightness(0.92); }
+[data-call-state="thinking"] .call-sky-image { filter: saturate(0.85) brightness(0.8); }
+[data-call-state="speaking"] .call-sky-image { filter: saturate(1.15) brightness(1.1); opacity: 1; }
+[data-call-state="error"] .call-sky-image { filter: saturate(0.5) brightness(0.7); }
 @media (prefers-reduced-motion: reduce) {
-    .call-rise, .call-caption, .call-spin { animation: none; }
+    .call-rise, .call-caption, .call-spin, .call-exit, .call-sent, .call-endpoint circle, .call-sky-image { animation: none; }
 }

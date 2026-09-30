@@ -22,9 +22,9 @@ import PremiumPanel from "@/components/PremiumPanel";
 import VoiceCallModal from "@/components/VoiceCallModal";
 import TermsGate from "@/components/TermsGate";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
-import { primeVoiceAudio, attachAnalyser } from "@/lib/voiceAudio";
+import { useVoiceCall } from "@/hooks/useVoiceCall";
 import {
-  sendChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, fetchTTS, clearMemories, isPaired, fetchProfile,
+  sendChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
 } from "@/lib/api";
 
@@ -77,11 +77,6 @@ export default function Luna() {
   const [sending, setSending] = useState(false);
   const [generatingImage, setGeneratingImage] = useState(false);
   const [generatingDoc, setGeneratingDoc] = useState(false);
-  const [playingId, setPlayingId] = useState(null);
-  const [loadingId, setLoadingId] = useState(null);
-  // Live loudness of the reply being spoken, for the call screen's visuals
-  // (null when the browser can't provide it — the audio still plays).
-  const [speakingAnalyser, setSpeakingAnalyser] = useState(null);
   const [pairOpen, setPairOpen] = useState(false);
   const [paired, setPaired] = useState(isPaired());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -99,16 +94,7 @@ export default function Luna() {
   // the mount effect below; null = nothing to accept.
   const [termsProfile, setTermsProfile] = useState(null);
   const [userName, setUserName] = useState("");
-  // True only while the dedicated voice-call screen is open — the only
-  // place Luna speaks replies aloud; normal chat stays silent.
-  const [callActive, setCallActive] = useState(false);
-  // Read at the moment a reply/TTS arrives, not when the request started —
-  // closing the call mid-request must keep Luna silent.
-  const callActiveRef = useRef(false);
-  callActiveRef.current = callActive;
-
-  const audioRef = useRef(null);
-  const t = (tr, en) => (lang === "tr" ? tr : en);
+  const t =(tr, en) => (lang === "tr" ? tr : en);
   // A plan-quota 429 carries a curated reason already translated into the
   // account's language (free plan's daily count, or a paid plan's weekly /
   // 30-day quota) — show it instead of guessing "daily". A rate-limit 429
@@ -171,19 +157,36 @@ export default function Luna() {
   const sttStopRef = useRef(() => {});
   // Same indirection for handleSend: onSpeechResult is only recreated on
   // mode/lang changes, so calling handleSend directly would use a stale
-  // copy (old conversationId, and callActive=false inside the call screen).
+  // copy (old conversationId, and a stale voice flag inside the call screen).
   const handleSendRef = useRef(() => {});
 
+  // The voice call (hooks/useVoiceCall.js), reached through a ref so the
+  // speech callbacks below don't need to be recreated with it.
+  const callRef = useRef(null);
+
   const onSpeechResult = useCallback((text) => {
+    // In a call, phrases are gathered into one turn (sent after a short
+    // silence); in the chat composer a phrase is sent right away, as before.
+    if (callRef.current?.handleFinal(text)) return;
     sttStopRef.current();
     if (text) handleSendRef.current(text);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, lang]);
+  }, []);
+  const onSpeechEnd = useCallback((info) => callRef.current?.handleSpeechEnd(info), []);
 
-  const {
-    listening, interim, supported, error: speechError, finalizing, start, stop, abort, clearError: clearSpeechError,
-  } = useSpeechRecognition({ lang, onResult: onSpeechResult, autoRestart: false });
+  const speech = useSpeechRecognition({ lang, onResult: onSpeechResult, onEnd: onSpeechEnd, autoRestart: false });
+  const { listening, interim, supported, start, stop } = speech;
   sttStopRef.current = stop;
+
+  const call = useVoiceCall({
+    lang,
+    mode,
+    t,
+    quotaMessage,
+    speech,
+    sending,
+    sendTurn: (text) => handleSendRef.current(text, { voice: true }),
+  });
+  callRef.current = call;
 
   // Switching mode always drops back to that mode's default thread — a
   // specific Sohbet picked in Arkadaş Modu shouldn't still be "open" after
@@ -225,81 +228,23 @@ export default function Luna() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paired, mode, conversationId]);
 
-  // The reply currently loaded for playback: its element, blob URL and the
-  // analyser hookup. dropSpeech() stops it for good and frees all three —
-  // used when a reply ends, is replaced, interrupted, or the call closes.
-  const speechRef = useRef(null);
-  const dropSpeech = useCallback(() => {
-    const s = speechRef.current;
-    if (!s) return;
-    speechRef.current = null;
-    s.audio.onended = s.audio.onerror = s.audio.onpause = s.audio.onplaying = null;
-    s.audio.pause();
-    s.release();
-    URL.revokeObjectURL(s.url);
-  }, []);
-
-  const playAudio = useCallback(async (msg) => {
-    let url = null;
-    try {
-      setLoadingId(msg.id);
-      url = await fetchTTS({ text: msg.text, mode });
-      setLoadingId(null);
-      if (!callActiveRef.current) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      dropSpeech();
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      const { analyser, release } = attachAnalyser(audio);
-      speechRef.current = { audio, url, release };
-      url = null; // owned by speechRef from here on
-      setSpeakingAnalyser(analyser);
-      setPlayingId(msg.id);
-      const finish = () => {
-        if (speechRef.current?.audio === audio) dropSpeech();
-        setPlayingId((id) => (id === msg.id ? null : id));
-      };
-      audio.onended = finish;
-      audio.onerror = finish;
-      // A pause the app didn't make (another app took audio focus, a
-      // headset button) must not leave the call on "Luna is speaking";
-      // a browser auto-resume puts it back.
-      audio.onpause = () => {
-        if (audioRef.current === audio && !audio.ended) setPlayingId((id) => (id === msg.id ? null : id));
-      };
-      audio.onplaying = () => {
-        if (audioRef.current === audio && callActiveRef.current) setPlayingId(msg.id);
-      };
-      await audio.play();
-    } catch (e) {
-      if (url) URL.revokeObjectURL(url);
-      // pause() interrupted a pending play() — endCall (already reset the
-      // state) or a newer reply taking over; not a real failure.
-      if (e?.name === "AbortError") return;
-      setLoadingId(null);
-      setPlayingId(null);
-      if (!callActiveRef.current) return;
-      toast.error(t("Ses oluşturulamadı", "Voice failed"));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, lang]);
-
-  const handleSend = useCallback(async (text) => {
-    const content = (text ?? input).trim();
+  const handleSend = useCallback(async (text, { voice = false } = {}) => {
+    const content = (typeof text === "string" ? text : input).trim();
     if (!content || sending) return;
-    setInput("");
+    if (!voice) setInput("");
     const optimistic = { id: "u-" + Date.now(), role: "user", text: content, mode };
     setMessages((m) => [...m, optimistic]);
     setSending(true);
+    // Which call (if any) this turn belongs to — a reply is only spoken in
+    // the same call it was asked in.
+    const callGen = callRef.current?.generation();
     try {
-      const reply = await sendChat({ message: content, mode, lang, conversationId });
+      const reply = await sendChat({ message: content, mode, lang, conversationId, voice });
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode };
       setMessages((m) => [...m, lunaMsg]);
       // Chat text replies stay silent by default — Luna only speaks while
       // the dedicated voice-call screen is open.
-      if (callActiveRef.current) playAudio(lunaMsg);
+      if (voice && callRef.current?.isLive()) callRef.current.onReply(lunaMsg, callGen);
     } catch (e) {
       // Covers both a failed /api/chat call and a failed auth step inside
       // sendChat() (authHeaders() -> registerDevice(), which throws the
@@ -323,16 +268,6 @@ export default function Luna() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [input, sending, mode, lang, conversationId]);
   handleSendRef.current = handleSend;
-
-  const endCall = () => {
-    setCallActive(false);
-    callActiveRef.current = false;
-    dropSpeech();
-    setPlayingId(null);
-    setLoadingId(null);
-    setSpeakingAnalyser(null);
-    if (listening) abort();
-  };
 
   // Same optimistic-bubble/error-handling shape as handleSend above, for an
   // image (png/jpg/webp/gif) or document (pdf/txt) instead of plain text —
@@ -481,29 +416,13 @@ export default function Luna() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generatingDoc, mode]);
 
+  // The chat composer's mic (the call has its own controls).
   const toggleMic = () => {
     if (!supported) {
       toast.error(t("Tarayıcı sesli girişi desteklemiyor", "Voice input not supported here"));
       return;
     }
-    primeVoiceAudio(); // a user gesture — lets the call's audio visuals run
-    if (listening) {
-      stop();
-      return;
-    }
-    // Starting to talk while Luna is still speaking interrupts her.
-    if (speechRef.current) {
-      dropSpeech();
-      setPlayingId(null);
-      setSpeakingAnalyser(null);
-    }
-    start();
-  };
-
-  const openCall = () => {
-    primeVoiceAudio();
-    clearSpeechError(); // an old chat-mic failure shouldn't greet the call
-    setCallActive(true);
+    listening ? stop() : start();
   };
 
   const handleClear = async () => {
@@ -538,7 +457,7 @@ export default function Luna() {
 
       {/* inert while the full-screen call is open: keyboard focus and screen
           readers stay inside the call instead of reaching hidden controls. */}
-      <div className="contents" inert={callActive}>
+      <div className="contents" inert={call.active}>
         <Sidebar
           mode={mode}
           lang={lang}
@@ -554,7 +473,7 @@ export default function Luna() {
         />
       </div>
 
-      <div className="relative z-10 flex-1 min-w-0 h-screen overflow-hidden flex flex-col px-4 sm:px-8 py-4 gap-3" inert={callActive}>
+      <div className="relative z-10 flex-1 min-w-0 h-screen overflow-hidden flex flex-col px-4 sm:px-8 py-4 gap-3" inert={call.active}>
         <FriendPanel
           lang={lang}
           messages={messages}
@@ -571,7 +490,7 @@ export default function Luna() {
           onGenerateDoc={handleGenerateDoc}
           generatingDoc={generatingDoc}
           onToggleMic={toggleMic}
-          onOpenCall={openCall}
+          onOpenCall={call.open}
           workMode={mode === "work"}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
         />
@@ -624,28 +543,7 @@ export default function Luna() {
       {openPanel === "work-chart" && <DocGeneratorPanel kind="chart" lang={lang} mode={mode} onClose={() => setOpenPanel(null)} />}
       {premiumOpen && <PremiumPanel lang={lang} onClose={() => setPremiumOpen(false)} />}
 
-      {callActive && (() => {
-        const lastLuna = [...messages].reverse().find((m) => m.role === "luna");
-        const lastUser = [...messages].reverse().find((m) => m.role === "user");
-        return (
-          <VoiceCallModal
-            lang={lang}
-            sending={sending || finalizing}
-            preparing={!!loadingId && loadingId === lastLuna?.id}
-            listening={listening}
-            interim={interim}
-            speaking={!!playingId && playingId === lastLuna?.id}
-            supported={supported}
-            speechError={speechError}
-            lastUserText={lastUser?.text}
-            lastLunaText={lastLuna?.text}
-            audioRef={audioRef}
-            analyser={speakingAnalyser}
-            onToggleMic={toggleMic}
-            onClose={endCall}
-          />
-        );
-      })()}
+      {call.active && <VoiceCallModal lang={lang} {...call.modalProps} />}
 
       {termsProfile && (
         <TermsGate

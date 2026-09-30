@@ -47,6 +47,41 @@ export function attachAnalyser(audio) {
   }
 }
 
+// How long to wait after a reply's 'ended' before opening the mic: the
+// output pipeline (and Bluetooth) still holds a little audio, and the mic
+// must not hear the tail of Luna's own voice.
+export function micDelayAfterSpeechMs() {
+  const latency = ctx ? ((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 1000 : 0;
+  return Math.max(400, Math.round(latency + 250));
+}
+
+// A soft two-note "your turn" chime (desktop only — Android's recognizer
+// plays its own start sound). Resolves when it has finished, so the mic can
+// open after it without hearing it.
+export function playTurnCue() {
+  return new Promise((resolve) => {
+    if (!ctx || ctx.state !== "running") return resolve();
+    try {
+      const t0 = ctx.currentTime + 0.01;
+      [[659.25, 0], [880, 0.09]].forEach(([freq, at]) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, t0 + at);
+        gain.gain.linearRampToValueAtTime(0.05, t0 + at + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.16);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t0 + at);
+        osc.stop(t0 + at + 0.18);
+      });
+      setTimeout(resolve, 420);
+    } catch (_) {
+      resolve();
+    }
+  });
+}
+
 // 0..1 loudness (RMS of the waveform, scaled so normal speech reaches ~0.6-0.9).
 export function readLevel(analyser, buffer) {
   if (!analyser) return 0;

@@ -215,14 +215,16 @@ function toWebMemory(m) {
   };
 }
 
-export async function sendChat({ message, mode, lang, conversationId }) {
+export async function sendChat({ message, mode, lang, conversationId, voice = false }) {
   const headers = await authHeaders();
   // Language is a per-account profile setting server-side, not per-message —
   // set it lazily so switching TR/EN in the UI takes effect on the next turn.
   await axios.post(`${API}/profile`, { language: lang }, { headers }).catch(() => {});
   const res = await axios.post(
     `${API}/chat`,
-    { text: message, mode: mode === "work" ? "work" : "friend", conversation_id: conversationId || null },
+    // voice: this turn is spoken in the call — the backend asks for a short,
+    // speakable reply (no markdown, lists or emoji).
+    { text: message, mode: mode === "work" ? "work" : "friend", conversation_id: conversationId || null, voice },
     { headers }
   );
   return res.data.reply;

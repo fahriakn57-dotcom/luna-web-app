@@ -19,7 +19,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 // on its own unless `stop()` was called deliberately — so an accidental
 // engine-side stop is invisible to the user instead of silently ending
 // the call.
-export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
+export function useSpeechRecognition({ lang, onResult, onEnd, autoRestart = false }) {
   const recognitionRef = useRef(null);
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
@@ -31,9 +31,16 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
   // later via onresult, then onend. `finalizing` covers that gap so a UI
   // doesn't flash back to "ready" in between.
   const [finalizing, setFinalizing] = useState(false);
+  // true once the engine is really recording (onaudiostart) — `listening`
+  // flips on at start(), a moment before the mic is actually open.
+  const [capturing, setCapturing] = useState(false);
   const activeRef = useRef(false);
+  // What happened in the current session, reported to onEnd.
+  const sessionRef = useRef({ heard: false, noSpeech: false, aborted: false });
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
   const autoRestartRef = useRef(autoRestart);
   autoRestartRef.current = autoRestart;
   const deliberateStopRef = useRef(false);
@@ -57,17 +64,21 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
         if (e.results[i].isFinal) finalText += t;
         else interimText += t;
       }
+      if (finalText || interimText) sessionRef.current.heard = true;
       setInterim(interimText);
       if (finalText) {
         setInterim("");
         onResultRef.current && onResultRef.current(finalText.trim());
       }
     };
+    rec.onaudiostart = () => setCapturing(true);
     rec.onend = () => {
       activeRef.current = false;
       setListening(false);
       setFinalizing(false);
+      setCapturing(false);
       setInterim("");
+      onEndRef.current?.({ ...sessionRef.current });
       // Only the voice-call flow opts into this — a plain single-tap mic
       // press must still behave like a deliberate on/off toggle.
       if (autoRestartRef.current && !deliberateStopRef.current) {
@@ -91,8 +102,10 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
         deliberateStopRef.current = true;
         setError(e.error);
       }
+      if (e.error === "no-speech") sessionRef.current.noSpeech = true;
       setListening(false);
       setFinalizing(false);
+      setCapturing(false);
     };
     recognitionRef.current = rec;
 
@@ -102,15 +115,22 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
     };
   }, [lang]);
 
+  // Returns whether a session actually started (false if one is still
+  // running or ending — the engine throws InvalidStateError then).
   const start = useCallback(() => {
-    if (!recognitionRef.current) return;
+    if (!recognitionRef.current) return false;
     deliberateStopRef.current = false;
     setError(null);
     try {
       recognitionRef.current.start();
+      sessionRef.current = { heard: false, noSpeech: false, aborted: false };
       activeRef.current = true;
+      setCapturing(false);
       setListening(true);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }, []);
 
   const stop = useCallback(() => {
@@ -128,15 +148,17 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
   const abort = useCallback(() => {
     if (!recognitionRef.current) return;
     deliberateStopRef.current = true;
+    sessionRef.current.aborted = true; // onend still fires; tell onEnd why
     try { recognitionRef.current.abort(); } catch (_) {}
     activeRef.current = false;
     setListening(false);
     setFinalizing(false);
+    setCapturing(false);
     setInterim("");
   }, []);
 
   // Forget an earlier failure (e.g. from the chat mic) before a fresh start.
   const clearError = useCallback(() => setError(null), []);
 
-  return { listening, interim, supported, error, finalizing, start, stop, abort, clearError };
+  return { listening, interim, supported, error, finalizing, capturing, start, stop, abort, clearError };
 }

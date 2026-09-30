@@ -5,7 +5,9 @@ import { readLevel } from "@/lib/voiceAudio";
 // Full-screen canvas behind the call UI. The moon is centred on `stageRef`
 // (the empty flex area the layout reserves for it), so text and controls
 // never overlap it on any screen size.
-export default function MoonCanvas({ state, analyser, activityKey, stageRef }) {
+//   flareKey  any change blooms the moon once (your words were sent)
+//   exiting   true → moonset (~450 ms); unmount after it
+export default function MoonCanvas({ state, analyser, activityKey, stageRef, flareKey, exiting }) {
   const canvasRef = useRef(null);
   const sceneRef = useRef(null);
 
@@ -55,6 +57,18 @@ export default function MoonCanvas({ state, analyser, activityKey, stageRef }) {
   useEffect(() => {
     if (activityKey) sceneRef.current?.pulse();
   }, [activityKey]);
+
+  // Only a change flares — not the value the call opened with.
+  const lastFlareKey = useRef(flareKey);
+  useEffect(() => {
+    if (flareKey === lastFlareKey.current) return;
+    lastFlareKey.current = flareKey;
+    sceneRef.current?.flare();
+  }, [flareKey]);
+
+  useEffect(() => {
+    if (exiting) sceneRef.current?.exit();
+  }, [exiting]);
 
   return <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-hidden="true" />;
 }
