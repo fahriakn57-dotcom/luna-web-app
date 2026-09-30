@@ -22,6 +22,7 @@ import PremiumPanel from "@/components/PremiumPanel";
 import VoiceCallModal from "@/components/VoiceCallModal";
 import TermsGate from "@/components/TermsGate";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { primeVoiceAudio, attachAnalyser } from "@/lib/voiceAudio";
 import {
   sendChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, fetchTTS, clearMemories, isPaired, fetchProfile,
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
@@ -78,6 +79,9 @@ export default function Luna() {
   const [generatingDoc, setGeneratingDoc] = useState(false);
   const [playingId, setPlayingId] = useState(null);
   const [loadingId, setLoadingId] = useState(null);
+  // Live loudness of the reply being spoken, for the call screen's visuals
+  // (null when the browser can't provide it — the audio still plays).
+  const [speakingAnalyser, setSpeakingAnalyser] = useState(null);
   const [pairOpen, setPairOpen] = useState(false);
   const [paired, setPaired] = useState(isPaired());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -176,7 +180,9 @@ export default function Luna() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, lang]);
 
-  const { listening, interim, supported, start, stop, abort } = useSpeechRecognition({ lang, onResult: onSpeechResult, autoRestart: false });
+  const {
+    listening, interim, supported, error: speechError, finalizing, start, stop, abort, clearError: clearSpeechError,
+  } = useSpeechRecognition({ lang, onResult: onSpeechResult, autoRestart: false });
   sttStopRef.current = stop;
 
   // Switching mode always drops back to that mode's default thread — a
@@ -219,20 +225,56 @@ export default function Luna() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paired, mode, conversationId]);
 
+  // The reply currently loaded for playback: its element, blob URL and the
+  // analyser hookup. dropSpeech() stops it for good and frees all three —
+  // used when a reply ends, is replaced, interrupted, or the call closes.
+  const speechRef = useRef(null);
+  const dropSpeech = useCallback(() => {
+    const s = speechRef.current;
+    if (!s) return;
+    speechRef.current = null;
+    s.audio.onended = s.audio.onerror = s.audio.onpause = s.audio.onplaying = null;
+    s.audio.pause();
+    s.release();
+    URL.revokeObjectURL(s.url);
+  }, []);
+
   const playAudio = useCallback(async (msg) => {
+    let url = null;
     try {
       setLoadingId(msg.id);
-      const url = await fetchTTS({ text: msg.text, mode });
+      url = await fetchTTS({ text: msg.text, mode });
       setLoadingId(null);
-      if (!callActiveRef.current) return;
-      if (audioRef.current) audioRef.current.pause();
+      if (!callActiveRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      dropSpeech();
       const audio = new Audio(url);
       audioRef.current = audio;
+      const { analyser, release } = attachAnalyser(audio);
+      speechRef.current = { audio, url, release };
+      url = null; // owned by speechRef from here on
+      setSpeakingAnalyser(analyser);
       setPlayingId(msg.id);
-      audio.onended = () => setPlayingId(null);
-      audio.onerror = () => setPlayingId(null);
+      const finish = () => {
+        if (speechRef.current?.audio === audio) dropSpeech();
+        setPlayingId((id) => (id === msg.id ? null : id));
+      };
+      audio.onended = finish;
+      audio.onerror = finish;
+      // A pause the app didn't make (another app took audio focus, a
+      // headset button) must not leave the call on "Luna is speaking";
+      // a browser auto-resume puts it back.
+      audio.onpause = () => {
+        if (audioRef.current === audio && !audio.ended) setPlayingId((id) => (id === msg.id ? null : id));
+      };
+      audio.onplaying = () => {
+        if (audioRef.current === audio && callActiveRef.current) setPlayingId(msg.id);
+      };
       await audio.play();
     } catch (e) {
+      if (url) URL.revokeObjectURL(url);
       // pause() interrupted a pending play() — endCall (already reset the
       // state) or a newer reply taking over; not a real failure.
       if (e?.name === "AbortError") return;
@@ -285,9 +327,10 @@ export default function Luna() {
   const endCall = () => {
     setCallActive(false);
     callActiveRef.current = false;
-    if (audioRef.current) audioRef.current.pause();
+    dropSpeech();
     setPlayingId(null);
     setLoadingId(null);
+    setSpeakingAnalyser(null);
     if (listening) abort();
   };
 
@@ -443,7 +486,24 @@ export default function Luna() {
       toast.error(t("Tarayıcı sesli girişi desteklemiyor", "Voice input not supported here"));
       return;
     }
-    listening ? stop() : start();
+    primeVoiceAudio(); // a user gesture — lets the call's audio visuals run
+    if (listening) {
+      stop();
+      return;
+    }
+    // Starting to talk while Luna is still speaking interrupts her.
+    if (speechRef.current) {
+      dropSpeech();
+      setPlayingId(null);
+      setSpeakingAnalyser(null);
+    }
+    start();
+  };
+
+  const openCall = () => {
+    primeVoiceAudio();
+    clearSpeechError(); // an old chat-mic failure shouldn't greet the call
+    setCallActive(true);
   };
 
   const handleClear = async () => {
@@ -476,21 +536,25 @@ export default function Luna() {
       <div className="pointer-events-none fixed inset-0 z-0"
         style={{ background: "radial-gradient(50% 35% at 20% 0%, rgba(217,70,239,0.14), transparent 70%)" }} />
 
-      <Sidebar
-        mode={mode}
-        lang={lang}
-        active={mode}
-        onNavigate={(key) => setMode(key === "work" ? "work" : "friend")}
-        onOpenMemories={() => setMemoriesOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenPanel={setOpenPanel}
-        onOpenPremium={() => setPremiumOpen(true)}
-        onOpenConversations={() => setConversationsOpen(true)}
-        mobileOpen={mobileMenuOpen}
-        onCloseMobile={() => setMobileMenuOpen(false)}
-      />
+      {/* inert while the full-screen call is open: keyboard focus and screen
+          readers stay inside the call instead of reaching hidden controls. */}
+      <div className="contents" inert={callActive}>
+        <Sidebar
+          mode={mode}
+          lang={lang}
+          active={mode}
+          onNavigate={(key) => setMode(key === "work" ? "work" : "friend")}
+          onOpenMemories={() => setMemoriesOpen(true)}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenPanel={setOpenPanel}
+          onOpenPremium={() => setPremiumOpen(true)}
+          onOpenConversations={() => setConversationsOpen(true)}
+          mobileOpen={mobileMenuOpen}
+          onCloseMobile={() => setMobileMenuOpen(false)}
+        />
+      </div>
 
-      <div className="relative z-10 flex-1 min-w-0 h-screen overflow-hidden flex flex-col px-4 sm:px-8 py-4 gap-3">
+      <div className="relative z-10 flex-1 min-w-0 h-screen overflow-hidden flex flex-col px-4 sm:px-8 py-4 gap-3" inert={callActive}>
         <FriendPanel
           lang={lang}
           messages={messages}
@@ -507,7 +571,7 @@ export default function Luna() {
           onGenerateDoc={handleGenerateDoc}
           generatingDoc={generatingDoc}
           onToggleMic={toggleMic}
-          onOpenCall={() => setCallActive(true)}
+          onOpenCall={openCall}
           workMode={mode === "work"}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
         />
@@ -560,18 +624,28 @@ export default function Luna() {
       {openPanel === "work-chart" && <DocGeneratorPanel kind="chart" lang={lang} mode={mode} onClose={() => setOpenPanel(null)} />}
       {premiumOpen && <PremiumPanel lang={lang} onClose={() => setPremiumOpen(false)} />}
 
-      {callActive && (
-        <VoiceCallModal
-          lang={lang}
-          sending={sending}
-          listening={listening}
-          interim={interim}
-          playingId={playingId}
-          lastLunaId={[...messages].reverse().find((m) => m.role === "luna")?.id}
-          onToggleMic={toggleMic}
-          onClose={endCall}
-        />
-      )}
+      {callActive && (() => {
+        const lastLuna = [...messages].reverse().find((m) => m.role === "luna");
+        const lastUser = [...messages].reverse().find((m) => m.role === "user");
+        return (
+          <VoiceCallModal
+            lang={lang}
+            sending={sending || finalizing}
+            preparing={!!loadingId && loadingId === lastLuna?.id}
+            listening={listening}
+            interim={interim}
+            speaking={!!playingId && playingId === lastLuna?.id}
+            supported={supported}
+            speechError={speechError}
+            lastUserText={lastUser?.text}
+            lastLunaText={lastLuna?.text}
+            audioRef={audioRef}
+            analyser={speakingAnalyser}
+            onToggleMic={toggleMic}
+            onClose={endCall}
+          />
+        );
+      })()}
 
       {termsProfile && (
         <TermsGate

@@ -24,6 +24,14 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
   const [supported, setSupported] = useState(true);
+  // Last fatal recognition error ("not-allowed", "audio-capture", ...) so
+  // the UI can say what's wrong; cleared on the next start().
+  const [error, setError] = useState(null);
+  // stop() only ASKS the engine to finish: the last words arrive a moment
+  // later via onresult, then onend. `finalizing` covers that gap so a UI
+  // doesn't flash back to "ready" in between.
+  const [finalizing, setFinalizing] = useState(false);
+  const activeRef = useRef(false);
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
   const autoRestartRef = useRef(autoRestart);
@@ -56,12 +64,16 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
       }
     };
     rec.onend = () => {
+      activeRef.current = false;
       setListening(false);
+      setFinalizing(false);
+      setInterim("");
       // Only the voice-call flow opts into this — a plain single-tap mic
       // press must still behave like a deliberate on/off toggle.
       if (autoRestartRef.current && !deliberateStopRef.current) {
         try {
           rec.start();
+          activeRef.current = true;
           setListening(true);
         } catch (_) {
           // Already starting/started, or the mic permission dropped —
@@ -77,8 +89,10 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
       // (permission denied, mic hardware gone) should NOT keep retrying.
       if (e.error !== "no-speech" && e.error !== "aborted") {
         deliberateStopRef.current = true;
+        setError(e.error);
       }
       setListening(false);
+      setFinalizing(false);
     };
     recognitionRef.current = rec;
 
@@ -91,8 +105,10 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
   const start = useCallback(() => {
     if (!recognitionRef.current) return;
     deliberateStopRef.current = false;
+    setError(null);
     try {
       recognitionRef.current.start();
+      activeRef.current = true;
       setListening(true);
     } catch (_) {}
   }, []);
@@ -100,6 +116,8 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
   const stop = useCallback(() => {
     if (!recognitionRef.current) return;
     deliberateStopRef.current = true;
+    // Only a running session ends with onend — never leave finalizing stuck.
+    if (activeRef.current) setFinalizing(true);
     try { recognitionRef.current.stop(); } catch (_) {}
     setListening(false);
   }, []);
@@ -111,9 +129,14 @@ export function useSpeechRecognition({ lang, onResult, autoRestart = false }) {
     if (!recognitionRef.current) return;
     deliberateStopRef.current = true;
     try { recognitionRef.current.abort(); } catch (_) {}
+    activeRef.current = false;
     setListening(false);
+    setFinalizing(false);
     setInterim("");
   }, []);
 
-  return { listening, interim, supported, start, stop, abort };
+  // Forget an earlier failure (e.g. from the chat mic) before a fresh start.
+  const clearError = useCallback(() => setError(null), []);
+
+  return { listening, interim, supported, error, finalizing, start, stop, abort, clearError };
 }
