@@ -215,16 +215,33 @@ function toWebMemory(m) {
   };
 }
 
-export async function sendChat({ message, mode, lang, conversationId, voice = false }) {
+// Luna's reply language — chosen in Settings, may differ from the TR/EN
+// interface (e.g. English UI, German replies). null = follow the interface.
+const REPLY_LANG_KEY = "luna_reply_lang";
+export function getReplyLang() {
+  try { return localStorage.getItem(REPLY_LANG_KEY) || null; } catch { return null; }
+}
+export function setReplyLang(code) {
+  try {
+    if (code) localStorage.setItem(REPLY_LANG_KEY, code);
+    else localStorage.removeItem(REPLY_LANG_KEY);
+  } catch {}
+}
+
+// mood: the mood the user picked TODAY in Ruh Halim ("great" | "good" |
+// "neutral" | "tired" | "bad"), or null — Luna takes it into account.
+export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null }) {
   const headers = await authHeaders();
   // Language is a per-account profile setting server-side, not per-message —
-  // set it lazily so switching TR/EN in the UI takes effect on the next turn.
-  await axios.post(`${API}/profile`, { language: lang }, { headers }).catch(() => {});
+  // set it lazily so a language change takes effect on the next turn. An
+  // explicit reply-language choice wins over the interface language (this
+  // used to reset it to TR/EN on every message).
+  await axios.post(`${API}/profile`, { language: getReplyLang() || lang }, { headers }).catch(() => {});
   const res = await axios.post(
     `${API}/chat`,
     // voice: this turn is spoken in the call — the backend asks for a short,
     // speakable reply (no markdown, lists or emoji).
-    { text: message, mode: mode === "work" ? "work" : "friend", conversation_id: conversationId || null, voice },
+    { text: message, mode: mode === "work" ? "work" : "friend", conversation_id: conversationId || null, voice, ...(mood ? { mood } : {}) },
     { headers }
   );
   return res.data.reply;
@@ -391,9 +408,12 @@ export async function fetchMessages(mode, conversationId) {
   return (res.data.messages || []).map(toWebMessage);
 }
 
-export async function clearMessages(mode) {
+// conversationId: the open Sohbetlerim thread, if any — that thread is
+// cleared instead of the mode's main one.
+export async function clearMessages(mode, conversationId = null) {
   const headers = await authHeaders();
-  await axios.delete(`${API}/messages`, { headers, params: mode ? { mode } : undefined });
+  const params = conversationId ? { conversation_id: conversationId } : mode ? { mode } : undefined;
+  await axios.delete(`${API}/messages`, { headers, params });
 }
 
 export async function fetchTTS({ text, mode }) {
@@ -461,9 +481,11 @@ export async function fetchGoals() {
   const res = await axios.get(`${API}/goals`, { headers });
   return { goals: res.data.goals || [], categories: res.data.categories || [] };
 }
-export async function createGoal({ title, category, description, deadline }) {
+// kind: "goal" (long-term, progress) | "plan" (dated, step by step).
+// steps: [{ id, text, done }] — progress follows the steps when there are any.
+export async function createGoal({ title, category, description, deadline, kind = "goal", steps = [] }) {
   const headers = await authHeaders();
-  const res = await axios.post(`${API}/goals`, { title, category, description, deadline }, { headers });
+  const res = await axios.post(`${API}/goals`, { title, category, description, deadline, kind, steps }, { headers });
   return res.data;
 }
 export async function editGoal(goalId, fields) {
@@ -529,9 +551,11 @@ export async function updateProfile(fields) {
   const res = await axios.post(`${API}/profile`, fields, { headers });
   return res.data;
 }
-export async function fetchDayInfo(lang) {
+// date: the viewer's LOCAL "YYYY-MM-DD" (the server's UTC day lags behind
+// Turkey between 00:00 and 03:00).
+export async function fetchDayInfo(lang, date) {
   const headers = await authHeaders();
-  const res = await axios.get(`${API}/day-info`, { headers, params: { lang } });
+  const res = await axios.get(`${API}/day-info`, { headers, params: date ? { lang, date } : { lang } });
   return res.data;
 }
 export async function fetchUsage() {
@@ -555,6 +579,9 @@ export async function deleteAccount() {
   signOut();
   localStorage.removeItem("luna_mode");
   localStorage.removeItem("luna_mood");
+  localStorage.removeItem("luna_mood_day");
+  localStorage.removeItem("luna_mood_log");
+  localStorage.removeItem("luna_reply_lang");
   return res.data; // { ok, deleted }
 }
 

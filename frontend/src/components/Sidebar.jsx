@@ -17,7 +17,7 @@ const FRIEND_ITEMS = [
   { key: "mood", icon: Activity, label: "Ruh Halim" },
   { key: "day-info", icon: CalendarHeart, label: "Günün Anlamı" },
   { key: "hobbies", icon: Sparkles, label: "Hobilerim" },
-  { key: "goals", icon: Target, label: "Hedeflerim" },
+  { key: "goals", icon: Target, label: "Hedeflerim & Planlarım" },
   { key: "notes", icon: StickyNote, label: "Notlarım" },
   { key: "alarms", icon: Bell, label: "Alarmlar" },
   { key: "usage", icon: Gauge, label: "Kullanımım" },

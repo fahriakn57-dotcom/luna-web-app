@@ -2,19 +2,9 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import lunaBg from "@/assets/luna-bg.jpg";
 import BootSequence from "@/components/BootSequence";
-import MemoryPanel from "@/components/MemoryPanel";
-import MoodPanel from "@/components/MoodPanel";
-import DayInfoPanel from "@/components/DayInfoPanel";
-import UsagePanel from "@/components/UsagePanel";
 import PairDeviceModal from "@/components/PairDeviceModal";
-import SettingsPanel from "@/components/SettingsPanel";
 import Sidebar from "@/components/Sidebar";
 import FriendPanel from "@/components/FriendPanel";
-import NotesPanel from "@/components/NotesPanel";
-import GoalsPanel from "@/components/GoalsPanel";
-import RemindersPanel from "@/components/RemindersPanel";
-import JournalPanel from "@/components/JournalPanel";
-import HobbiesPanel from "@/components/HobbiesPanel";
 import ImageGalleryPanel from "@/components/ImageGalleryPanel";
 import ConversationsPanel from "@/components/ConversationsPanel";
 import DocGeneratorPanel from "@/components/DocGeneratorPanel";
@@ -23,10 +13,26 @@ import VoiceCallModal from "@/components/VoiceCallModal";
 import TermsGate from "@/components/TermsGate";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useVoiceCall } from "@/hooks/useVoiceCall";
+import { useReminderAlerts } from "@/hooks/useReminderAlerts";
+import { dayKey } from "@/lib/dates";
+import PanelSlot, { lazyPanel } from "@/components/panel/PanelSlot";
 import {
   sendChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
+  getReplyLang, setReplyLang,
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
 } from "@/lib/api";
+
+// Sidebar panels load on demand — see components/panel/PanelSlot.jsx.
+const MemoryPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/MemoryPanel"));
+const MoodPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/MoodPanel"));
+const DayInfoPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/DayInfoPanel"));
+const UsagePanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/UsagePanel"));
+const SettingsPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/SettingsPanel"));
+const NotesPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/NotesPanel"));
+const GoalsPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/GoalsPanel"));
+const RemindersPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/RemindersPanel"));
+const JournalPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/JournalPanel"));
+const HobbiesPanel = lazyPanel(() => import(/* webpackPrefetch: true */ "@/components/HobbiesPanel"));
 
 // Wand-menu doc kinds (everything except "image", which already has its own
 // generateImage/imageUrl path) — one shared handler below drives all of
@@ -71,7 +77,15 @@ export default function Luna() {
     return saved === "jarvis" ? "friend" : saved || "friend";
   });
   const [lang, setLang] = useState(() => localStorage.getItem("luna_lang") || "tr");
-  const [mood, setMood] = useState(() => localStorage.getItem("luna_mood") || "good");
+  // Ruh Halim: only a mood picked TODAY counts (it's sent with each message
+  // so Luna can take it into account); yesterday's pick expires on its own.
+  const [mood, setMood] = useState(() => {
+    try {
+      return localStorage.getItem("luna_mood_day") === dayKey() ? localStorage.getItem("luna_mood") : null;
+    } catch {
+      return null;
+    }
+  });
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -111,7 +125,17 @@ export default function Luna() {
 
   useEffect(() => { localStorage.setItem("luna_mode", mode); }, [mode]);
   useEffect(() => { localStorage.setItem("luna_lang", lang); }, [lang]);
-  useEffect(() => { localStorage.setItem("luna_mood", mood); }, [mood]);
+  useEffect(() => {
+    try {
+      if (mood) {
+        localStorage.setItem("luna_mood", mood);
+        localStorage.setItem("luna_mood_day", dayKey());
+      } else {
+        localStorage.removeItem("luna_mood");
+        localStorage.removeItem("luna_mood_day");
+      }
+    } catch {}
+  }, [mood]);
 
   // The browser lands back here after an iyzico checkout (see
   // routers/subscription.py::billing_callback's RedirectResponse to
@@ -145,7 +169,13 @@ export default function Luna() {
   useEffect(() => {
     let cancelled = false;
     fetchProfile().then((p) => {
-      if (cancelled || !p?.terms_current_version) return;
+      if (cancelled) return;
+      // A reply language other than TR/EN can only come from the Settings
+      // picker (on this or another device) — keep it, instead of letting
+      // this device's interface language overwrite it on the next message.
+      const serverLang = p?.profile?.language;
+      if (!getReplyLang() && serverLang && serverLang !== "tr" && serverLang !== "en") setReplyLang(serverLang);
+      if (!p?.terms_current_version) return;
       if (p.terms_accepted_version !== p.terms_current_version) setTermsProfile(p);
     }).catch(() => {});
     return () => { cancelled = true; };
@@ -187,6 +217,8 @@ export default function Luna() {
     sendTurn: (text) => handleSendRef.current(text, { voice: true }),
   });
   callRef.current = call;
+
+  useReminderAlerts({ lang });
 
   // Switching mode always drops back to that mode's default thread — a
   // specific Sohbet picked in Arkadaş Modu shouldn't still be "open" after
@@ -239,7 +271,9 @@ export default function Luna() {
     // the same call it was asked in.
     const callGen = callRef.current?.generation();
     try {
-      const reply = await sendChat({ message: content, mode, lang, conversationId, voice });
+      // A mood picked on an earlier day no longer applies.
+      const todaysMood = mood && localStorage.getItem("luna_mood_day") === dayKey() ? mood : null;
+      const reply = await sendChat({ message: content, mode, lang, conversationId, voice, mood: todaysMood });
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode };
       setMessages((m) => [...m, lunaMsg]);
       // Chat text replies stay silent by default — Luna only speaks while
@@ -266,7 +300,7 @@ export default function Luna() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, sending, mode, lang, conversationId]);
+  }, [input, sending, mode, lang, conversationId, mood]);
   handleSendRef.current = handleSend;
 
   // Same optimistic-bubble/error-handling shape as handleSend above, for an
@@ -426,7 +460,7 @@ export default function Luna() {
   };
 
   const handleClear = async () => {
-    await clearMessages(mode);
+    await clearMessages(mode, conversationId);
     setMessages([]);
     setSettingsOpen(false);
     toast.success(t("Sohbet temizlendi", "Chat cleared"));
@@ -497,6 +531,7 @@ export default function Luna() {
       </div>
 
       {settingsOpen && (
+        <PanelSlot lang={lang} onClose={() => setSettingsOpen(false)}>
         <SettingsPanel
           lang={lang}
           setLang={setLang}
@@ -506,10 +541,13 @@ export default function Luna() {
           onClearMemories={handleClearAllMemories}
           onClose={() => setSettingsOpen(false)}
         />
+        </PanelSlot>
       )}
 
       {memoriesOpen && (
-        <MemoryPanel lang={lang} onClose={() => setMemoriesOpen(false)} />
+        <PanelSlot lang={lang} onClose={() => setMemoriesOpen(false)}>
+          <MemoryPanel lang={lang} onClose={() => setMemoriesOpen(false)} />
+        </PanelSlot>
       )}
 
       {conversationsOpen && (
@@ -526,14 +564,19 @@ export default function Luna() {
         <PairDeviceModal lang={lang} onPaired={handlePaired} onClose={() => setPairOpen(false)} />
       )}
 
-      {openPanel === "notes" && <NotesPanel lang={lang} onClose={() => setOpenPanel(null)} />}
-      {openPanel === "goals" && <GoalsPanel lang={lang} onClose={() => setOpenPanel(null)} />}
-      {openPanel === "alarms" && <RemindersPanel lang={lang} onClose={() => setOpenPanel(null)} />}
-      {openPanel === "journal" && <JournalPanel lang={lang} onClose={() => setOpenPanel(null)} />}
-      {openPanel === "hobbies" && <HobbiesPanel lang={lang} onClose={() => setOpenPanel(null)} />}
-      {openPanel === "mood" && <MoodPanel lang={lang} mood={mood} setMood={setMood} onClose={() => setOpenPanel(null)} />}
-      {openPanel === "day-info" && <DayInfoPanel lang={lang} onClose={() => setOpenPanel(null)} />}
-      {openPanel === "usage" && <UsagePanel lang={lang} onClose={() => setOpenPanel(null)} />}
+      {openPanel === "notes" && <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}><NotesPanel lang={lang} onClose={() => setOpenPanel(null)} /></PanelSlot>}
+      {openPanel === "goals" && <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}><GoalsPanel lang={lang} onClose={() => setOpenPanel(null)} /></PanelSlot>}
+      {openPanel === "alarms" && <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}><RemindersPanel lang={lang} onClose={() => setOpenPanel(null)} /></PanelSlot>}
+      {openPanel === "journal" && <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}><JournalPanel lang={lang} onClose={() => setOpenPanel(null)} /></PanelSlot>}
+      {openPanel === "hobbies" && <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}><HobbiesPanel lang={lang} onClose={() => setOpenPanel(null)} /></PanelSlot>}
+      {openPanel === "mood" && <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}><MoodPanel lang={lang} mood={mood} setMood={setMood} onClose={() => setOpenPanel(null)} /></PanelSlot>}
+      {openPanel === "day-info" && <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}><DayInfoPanel lang={lang} onClose={() => setOpenPanel(null)} /></PanelSlot>}
+      {openPanel === "usage" && (
+        <PanelSlot lang={lang} onClose={() => setOpenPanel(null)}>
+          <UsagePanel lang={lang} onClose={() => setOpenPanel(null)}
+            onOpenPremium={() => { setOpenPanel(null); setPremiumOpen(true); }} />
+        </PanelSlot>
+      )}
       {openPanel === "work-images" && <ImageGalleryPanel lang={lang} onClose={() => setOpenPanel(null)} />}
       {openPanel === "work-pdf" && <DocGeneratorPanel kind="pdf" lang={lang} mode={mode} onClose={() => setOpenPanel(null)} />}
       {openPanel === "work-excel" && <DocGeneratorPanel kind="excel" lang={lang} mode={mode} onClose={() => setOpenPanel(null)} />}
