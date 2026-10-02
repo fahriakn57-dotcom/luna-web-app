@@ -1,4 +1,5 @@
 import { attachAnalyser, isAudible, releaseAnalyser, resumeVoiceAudio } from "@/lib/voiceAudio";
+import { browserVoiceSupported, sayWithBrowser, unlockBrowserVoice } from "@/lib/browserVoice";
 
 // Luna's voice in a call (driven by hooks/useVoiceCall.js). Two jobs:
 //
@@ -14,21 +15,57 @@ import { attachAnalyser, isAudible, releaseAnalyser, resumeVoiceAudio } from "@/
 //    next whenever one is done — and played strictly in order, the first as
 //    soon as it is there. If the next piece isn't there when one ends, the
 //    player waits for it (the call still counts as speaking: no mic, no idle
-//    flash). A failed piece is asked for once more before giving up; nothing
-//    after a missing piece is said (it would skip words).
+//    flash). A dropped connection or a gateway error is asked for once more
+//    (see worthRetrying).
 //
-// The caller owns the reply's pieces ({text, url}) and their blob URLs —
-// they are kept for "Tekrar dinle". The player fills in url as pieces arrive,
-// and revokes only what arrives after it was stopped.
+// 3. A piece the server's voice can't make — its TTS is busy (503
+//    "tts_busy"), refuses the text (400), or still fails after the retry —
+//    is said in the device's own voice instead (lib/browserVoice.js), and the
+//    pieces after it keep coming from the server as usual. The call stays
+//    "speaking" throughout; the visuals just have no live level for that
+//    piece. Only the user's own usage limit (429) still ends her voice — the
+//    call then reads the answer out with that message — and so does a device
+//    that can't speak; nothing after a missing piece is said (it would skip
+//    words).
+//
+// The caller owns the reply's pieces ({text, url, synth}) and their blob
+// URLs — they are kept for "Tekrar dinle". The player fills in url as pieces
+// arrive (or sets synth: said by the device, again on a replay), and revokes
+// only what arrives after it was stopped.
 
 const IN_FLIGHT = 2;
 const PIECE_TIMEOUT_MS = 25000; // a piece takes 2-11 s; a stuck request must not hang the call
 
-// A network failure, a timeout or a server error may pass on a second try;
-// a 4xx (a used-up quota, a bad request) won't.
+// A dropped connection or a gateway error (a proxy's 5xx page, the server
+// restarting) may pass on a second try. Not a 4xx (the same text would be
+// refused again), not when the server says when to come back (its TTS is
+// busy for a while), not a piece that already took PIECE_TIMEOUT_MS, and not
+// the server's own "voice failed" (a JSON detail): it has already retried
+// the voice model itself or been refused for good — asking again would only
+// spend more of the model's few requests per minute. The device says those
+// right away.
 function worthRetrying(error) {
-  const status = error?.response?.status;
-  return !status || status >= 500 || status === 408;
+  const res = error?.response;
+  if (error?.name === "TimeoutError" || res?.headers?.["retry-after"]) return false;
+  if (res?.data?.detail === "tts_busy") return false;
+  const status = res?.status;
+  if (!status) return true;
+  if (status === 408) return true;
+  return status >= 500 && !(res.data && typeof res.data === "object" && res.data.detail);
+}
+
+// Whether the device's voice says a piece the server's couldn't: anything
+// but the user's own usage limit (a plan quota, or going too fast).
+function deviceSays(error) {
+  const busy = error?.response?.data?.detail === "tts_busy";
+  return browserVoiceSupported() && (busy || error?.response?.status !== 429);
+}
+
+function speechError(code) {
+  const e = new Error(`speech synthesis failed: ${code}`);
+  e.name = "SpeechSynthesisError";
+  e.code = code;
+  return e;
 }
 
 // 0.1 s of silence (16-bit PCM WAV) for unlock(), made once. A blob URL like
@@ -119,6 +156,7 @@ export function createVoicePlayer() {
     const r = run;
     if (!r) return;
     run = null;
+    hush(r, false);
     r.st.forEach((s) => {
       if (s.ctl) s.ctl.abort();
       s.ctl = null;
@@ -166,11 +204,96 @@ export function createVoicePlayer() {
     });
   };
 
+  // ---- a piece in the device's voice
+  // The page went to the background: the device's voice stops there (it
+  // would be cut off anyway) and waits for "Devam et".
+  let watchingPage = false;
+  const onVisibility = () => {
+    if (document.visibilityState === "hidden") hush(run, true);
+  };
+  const watchPage = (on) => {
+    if (on === watchingPage) return;
+    watchingPage = on;
+    if (on) document.addEventListener("visibilitychange", onVisibility);
+    else document.removeEventListener("visibilitychange", onVisibility);
+  };
+
+  // Stop the device's voice. hold: a pause — remember where it was, so
+  // resume() goes on from that word, and show "Devam et".
+  const hush = (r, hold) => {
+    if (!r || !r.voice) return;
+    const h = r.voice;
+    r.voice = null;
+    watchPage(false);
+    if (hold) r.from = h.resumeAt();
+    h.cancel();
+    if (hold) block(r);
+  };
+
+  const say = (r) => {
+    if (r.paused) return; // paused between two pieces: resume() starts it
+    if (document.visibilityState === "hidden") {
+      block(r);
+      return;
+    }
+    const index = r.index;
+    const text = r.pieces[index].text;
+    let h = null;
+    const mine = () => !!h && r === run && r.voice === h;
+    try {
+      h = sayWithBrowser(text, {
+        lang: r.lang,
+        from: r.from,
+        onStart: () => {
+          if (!mine()) return;
+          r.paused = false;
+          r.on.onPlaying?.(index);
+        },
+        onEnd: () => {
+          if (!mine()) return;
+          r.voice = null;
+          watchPage(false);
+          r.done += text.length;
+          next(r);
+        },
+        onError: (code) => {
+          if (!mine()) return;
+          r.voice = null;
+          watchPage(false);
+          // It wants a tap ("not-allowed"), or something else stopped it —
+          // the system took the audio, the page is going away ("interrupted",
+          // "canceled": the player's own cancels never get here): a pause,
+          // "Devam et" goes on from the word it reached. Anything else: the
+          // device can't say it — the reply is read out.
+          if (code === "not-allowed" || code === "interrupted" || code === "canceled") {
+            r.from = h.resumeAt();
+            block(r);
+          } else {
+            fail(r, speechError(code));
+          }
+        },
+      });
+    } catch (_) {
+      h = null;
+    }
+    if (!h) {
+      fail(r, speechError("unsupported"));
+      return;
+    }
+    r.voice = h;
+    watchPage(true);
+  };
+
   // Play the run's current piece, or wait for it.
   const play = (r) => {
     const s = r.st[r.index];
     if (s.status === "failed") {
       fail(r, s.error);
+      return;
+    }
+    if (s.status === "synth") {
+      r.waiting = false;
+      say(r);
       return;
     }
     if (s.status !== "ready") {
@@ -187,6 +310,7 @@ export function createVoicePlayer() {
 
   const next = (r) => {
     r.index += 1;
+    r.from = 0;
     if (r.index >= r.pieces.length) {
       run = null;
       lastProgress = 1;
@@ -232,6 +356,13 @@ export function createVoicePlayer() {
       if (!settle()) return;
       if (s.tries < 2 && worthRetrying(error)) {
         s.status = "idle";
+      } else if (deviceSays(error)) {
+        // The device says this piece; the ones after it keep coming.
+        s.status = "synth";
+        s.error = error;
+        r.pieces[i].synth = true;
+        r.on.onPieceReady?.(i);
+        if (r.waiting && r.index === i) play(r);
       } else {
         s.status = "failed";
         s.error = error;
@@ -244,7 +375,7 @@ export function createVoicePlayer() {
           return;
         }
       }
-      pump(r);
+      if (r === run) pump(r);
     };
     ctl.signal.addEventListener("abort", () => {
       const e = new Error(timedOut ? "timeout" : "canceled");
@@ -271,6 +402,7 @@ export function createVoicePlayer() {
     // later without one.
     unlock() {
       const audio = element();
+      unlockBrowserVoice();
       if (run) return; // she is speaking — it is unlocked already
       try {
         audio.src = silentClip();
@@ -278,17 +410,26 @@ export function createVoicePlayer() {
       } catch (_) {}
     },
 
-    // Speak a reply: pieces [{text, url}] (url set = already fetched, e.g.
-    // "Tekrar dinle"), fetchPiece(index, signal) -> Promise<blob URL>, and
-    // the callbacks onPieceReady(i), onPlaying(i), onPaused(), onDone(),
-    // onFailed(i, error). Replaces whatever was being said.
-    speak({ pieces, fetchPiece, ...on }) {
+    // Speak a reply: pieces [{text, url, synth}] (url set = already fetched,
+    // synth = said by the device last time, e.g. "Tekrar dinle"),
+    // fetchPiece(index, signal) -> Promise<blob URL>, lang ("tr-TR" |
+    // "en-US", for the device's voice), and the callbacks onPieceReady(i),
+    // onPlaying(i), onPaused(), onDone(), onFailed(i, error). Replaces
+    // whatever was being said.
+    speak({ pieces, fetchPiece, lang, ...on }) {
       halt();
+      const synth = browserVoiceSupported();
       const r = {
         pieces,
         fetchPiece,
         on,
-        st: pieces.map((p) => ({ status: p.url ? "ready" : "idle", tries: 0, ctl: null, error: null })),
+        lang: lang || "tr-TR",
+        st: pieces.map((p) => ({
+          status: p.url ? "ready" : p.synth && synth ? "synth" : "idle",
+          tries: 0,
+          ctl: null,
+          error: null,
+        })),
         index: -1,      // the piece being played (or waited for)
         waiting: false, // ...waited for: it hasn't arrived yet
         paused: false,
@@ -296,6 +437,8 @@ export function createVoicePlayer() {
         total: pieces.reduce((n, p) => n + p.text.length, 0),
         inFlight: 0,
         stopAt: Infinity, // a piece failed for good: nothing from it on is said
+        voice: null,      // the device saying the current piece (lib/browserVoice.js)
+        from: 0,          // ...from this character on (after a pause)
       };
       run = r;
       lastProgress = 0;
@@ -309,7 +452,12 @@ export function createVoicePlayer() {
     // already quiet: the next piece is held instead of played on arrival.
     pause() {
       const r = run;
-      if (!r || !el || r.paused) return;
+      if (!r || r.paused) return;
+      if (r.voice) {
+        hush(r, true);
+        return;
+      }
+      if (!el) return;
       if (!el.paused) {
         el.pause(); // its "pause" event reports it
       } else if (r.waiting && r.index > 0) {
@@ -321,7 +469,7 @@ export function createVoicePlayer() {
     // After a pause (or a refused play): call it inside the tap.
     resume() {
       const r = run;
-      if (!r || r.index < 0 || !el) return;
+      if (!r || r.index < 0) return;
       const wasPaused = r.paused;
       r.paused = false;
       if (r.waiting) {
@@ -330,22 +478,34 @@ export function createVoicePlayer() {
         if (wasPaused) r.on.onPlaying?.(r.index);
         return;
       }
-      start(r);
+      if (r.st[r.index].status === "synth") {
+        if (!r.voice) say(r); // from where it stopped
+        return;
+      }
+      if (el) start(r);
     },
 
     active: () => !!run,
-    analyser: () => analyser,
+    // (None while the device says a piece: its voice can't be measured.)
+    analyser: () => (run && run.index >= 0 && run.st[run.index]?.status === "synth" ? null : analyser),
 
     // How much of the reply she has said, 0..1 (by characters; within a
-    // piece by its playback time).
+    // piece by its playback time, or the device voice's word boundaries).
     progress() {
       const r = run;
       if (!r || !r.total) return lastProgress;
       let now = 0;
-      if (r.index >= 0 && !r.waiting && el && el.duration && isFinite(el.duration)) {
-        now = r.pieces[r.index].text.length * Math.min(1, el.currentTime / el.duration);
+      if (r.index >= 0 && !r.waiting) {
+        if (r.voice) now = r.voice.position();
+        else if (r.st[r.index].status === "synth") now = r.from;
+        else if (el && el.duration && isFinite(el.duration)) {
+          now = r.pieces[r.index].text.length * Math.min(1, el.currentTime / el.duration);
+        }
       }
-      lastProgress = Math.min(1, (r.done + now) / r.total);
+      // Never backwards within a reply: the device voice's first word
+      // boundary can land a little behind its time estimate, and after a
+      // pause it starts again from the beginning of the word it reached.
+      lastProgress = Math.max(lastProgress, Math.min(1, (r.done + now) / r.total));
       return lastProgress;
     },
 

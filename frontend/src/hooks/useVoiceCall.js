@@ -15,7 +15,8 @@ import { toSpeechPieces } from "@/lib/speechChunks";
 //   - her voice: the reply is synthesized and played piece by piece
 //     (lib/speechChunks.js, lib/voicePlayer.js), so she starts talking a few
 //     seconds after her answer arrives, on one audio element that iOS lets
-//     play without a tap
+//     play without a tap; a piece the server's voice can't make is said in
+//     the device's own voice (lib/browserVoice.js) instead of going silent
 //   - playback: live level for the visuals, resume after an outside pause,
 //     replay of the last reply, and the reply as text if her voice fails
 //   - phone behaviour: Android Back ends the call, lock-screen/headset
@@ -213,14 +214,17 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     clearTurn();
     setVoiceFailed(null);
     setPausedId(null);
-    // "thinking" until her first piece is there ("Tekrar dinle" has it already).
-    const firstReady = !!r.pieces[0]?.url;
+    // "thinking" until her first piece is there ("Tekrar dinle" has it
+    // already — or the device says it again, see lib/voicePlayer.js).
+    const firstReady = !!(r.pieces[0]?.url || r.pieces[0]?.synth);
     setPlayingId(firstReady ? msg.id : null);
     setLoadingId(firstReady ? null : msg.id);
     let heard = false; // has any of it been audible yet
     player.speak({
       pieces: r.pieces,
       fetchPiece: (i, signal) => fetchTTS({ text: r.pieces[i].text, turnId: r.turnId, part: i, signal }),
+      // The device's voice, for a piece the server's couldn't make.
+      lang: latest.current.lang === "tr" ? "tr-TR" : "en-US",
       onPieceReady: (i) => {
         if (i === 0 && lastReplyRef.current === r) setCanReplay(true);
       },
@@ -230,7 +234,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
         setLoadingId(null);
         setPausedId(null);
         setPlayingId(msg.id);
-        setAnalyser(player.analyser());
+        setAnalyser(player.analyser()); // (none for a piece in the device's voice)
         setPlaybackState("playing");
       },
       // A pause the app didn't make (another app took the audio, a headset
@@ -469,7 +473,9 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
   // sentence from there, and pick the conversation up again on return.
   // (Luna's voice is left alone: with the screen off she may finish her
   // answer — the lock-screen controls are for that — and if the system
-  // pauses her or won't play the next piece, the call shows "Devam et".)
+  // pauses her or won't play the next piece, the call shows "Devam et". A
+  // piece in the device's voice stops there and waits for "Devam et" —
+  // lib/voicePlayer.js.)
   useEffect(() => {
     if (!active) return undefined;
     const onVisibility = () => {
@@ -653,7 +659,9 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     primeVoiceAudio();
     const last = lastReplyRef.current;
     if (!last || !liveRef.current) return;
-    speak(last); // (pieces that never arrived are fetched again, same turn)
+    // (Pieces that never arrived are fetched again, same turn; the ones the
+    // device said, it says again.)
+    speak(last);
   }, [speak]);
 
   const toggleHandsFree = useCallback(() => {

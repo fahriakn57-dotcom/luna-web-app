@@ -12,13 +12,20 @@
 // being said, so it may only be as long as they give it time for: each one
 // may be GROWTH × everything before it, up to PIECE_MAX.
 //
+// Never a tiny piece: Gemini's TTS refuses some very short texts outright
+// ("Merhaba!" -> 400, "Olur." -> no audio at all) while sentences of 16+
+// characters were always fine. So a short first sentence takes the next one
+// along, and a short later piece joins its neighbour. Only a reply that is
+// itself that short is sent as it is (the server retries it, and the device's
+// own voice covers it if that fails too — lib/browserVoice.js).
+//
 // Pieces end at sentence ends where they can, otherwise after a , ; : or
 // dash, otherwise between words — never inside a word.
 
 const FIRST_MAX = 110; // a first sentence up to this long is the whole first piece
 const FIRST_CUT = 90;  // a longer one is cut before here
-const FIRST_MIN = 30;  // a shorter one takes the next sentence along (a lone "Evet."
-                       // would leave a gap while the long second piece is made)
+const FIRST_MIN = 30;  // a shorter one takes the next sentence along
+const LATER_MIN = 25;  // a later piece shorter than this joins a neighbour
 const PIECE_MIN = 80;
 const PIECE_MAX = 220;
 const GROWTH = 1.8;
@@ -46,20 +53,22 @@ function cutAt(s, limit, minHead) {
     if (CLAUSE_MARKS.includes(s[i]) && s[i + 1] === " ") return [s.slice(0, i + 1).trim(), s.slice(i + 2).trim()];
   }
   const space = s.lastIndexOf(" ", limit);
-  if (space > 0) return [s.slice(0, space).trim(), s.slice(space + 1).trim()];
-  // One enormous "word": cut after it rather than inside it.
+  if (space >= minHead) return [s.slice(0, space).trim(), s.slice(space + 1).trim()];
+  // One enormous "word" (with less than minHead before it): cut after it,
+  // never inside it nor before it (that would leave a tiny head).
   const after = s.indexOf(" ", limit);
-  return after > 0 ? [s.slice(0, after), s.slice(after + 1).trim()] : [s, ""];
+  return after > 0 ? [s.slice(0, after).trim(), s.slice(after + 1).trim()] : [s, ""];
 }
 
 export function toSpeechPieces(text) {
   const sentences = splitSentences((text || "").replace(/\s+/g, " ").trim());
   if (!sentences.length) return [];
 
+  // The first piece: short, for a fast start, but never a tiny one. A short
+  // first sentence takes the next along even when the two together are over
+  // FIRST_MAX — they are then cut again below, past FIRST_MIN characters.
   let first = sentences.shift();
-  while (first.length < FIRST_MIN && sentences.length && first.length + 1 + sentences[0].length <= FIRST_MAX) {
-    first = `${first} ${sentences.shift()}`;
-  }
+  while (first.length < FIRST_MIN && sentences.length) first = `${first} ${sentences.shift()}`;
   if (first.length > FIRST_MAX) {
     const [head, rest] = cutAt(first, FIRST_CUT, FIRST_MIN);
     first = head;
@@ -78,10 +87,13 @@ export function toSpeechPieces(text) {
         sentences.shift();
         continue;
       }
-      if (!piece) {
-        // One sentence longer than the piece may be: its head now, the rest next.
-        const [head, rest] = cutAt(sentences[0], limit, Math.floor(limit / 2));
-        piece = head;
+      if (piece.length < LATER_MIN) {
+        // Nothing yet (one sentence longer than the piece may be), or too
+        // little to stand alone ("Evet."): fill the piece up with the next
+        // sentence's head; its rest comes next.
+        const room = piece ? limit - piece.length - 1 : limit;
+        const [head, rest] = cutAt(sentences[0], room, Math.floor(room / 2));
+        piece = piece ? `${piece} ${head}` : head;
         if (rest) sentences[0] = rest;
         else sentences.shift();
       }
@@ -89,6 +101,16 @@ export function toSpeechPieces(text) {
     }
     pieces.push(piece);
     said += piece.length;
+  }
+
+  // What is still tiny (a short last sentence that didn't fit the piece
+  // before it, the tail of a cut) joins a neighbour: the next piece, or the
+  // one before when it is the last.
+  for (let i = pieces.length - 1; i >= 1; i--) {
+    if (pieces[i].length >= LATER_MIN) continue;
+    if (i < pieces.length - 1) pieces[i + 1] = `${pieces[i]} ${pieces[i + 1]}`;
+    else pieces[i - 1] = `${pieces[i - 1]} ${pieces[i]}`;
+    pieces.splice(i, 1);
   }
   return pieces;
 }
