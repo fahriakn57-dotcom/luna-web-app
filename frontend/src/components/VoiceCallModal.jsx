@@ -20,9 +20,11 @@ function formatTime(sec) {
 }
 
 // Luna's reply, one caption at a time, words lighting up roughly in step
-// with the audio. Progress = currentTime / duration, spread over the pieces
-// by their timing weight (sentence ends and commas take a little longer).
-function SpokenCaption({ text, audioRef }) {
+// with the audio. progress() = how much of the reply she has said (0..1,
+// across all the pieces her voice comes in — lib/voicePlayer.js), spread
+// over the captions by their timing weight (sentence ends and commas take a
+// little longer).
+function SpokenCaption({ text, progress }) {
   const chunks = useMemo(() => toChunks(toSpoken(text)), [text]);
   const total = useMemo(() => chunks.reduce((n, c) => n + c.weight, 0), [chunks]);
   const [pos, setPos] = useState(0);
@@ -30,12 +32,10 @@ function SpokenCaption({ text, audioRef }) {
   useEffect(() => {
     setPos(0);
     const id = setInterval(() => {
-      const a = audioRef.current;
-      if (!a || !a.duration || !isFinite(a.duration)) return;
-      setPos(Math.min(total, (a.currentTime / a.duration + 0.02) * total));
+      setPos(Math.min(total, (progress() + 0.02) * total));
     }, 90);
     return () => clearInterval(id);
-  }, [text, total, audioRef]);
+  }, [text, total, progress]);
 
   let offset = 0;
   let index = 0;
@@ -111,9 +111,9 @@ function useScreenWakeLock(enabled, quiet) {
 }
 
 export default function VoiceCallModal({
-  lang, state, capturing, interim, pendingText, speechError, supported = true, lastSent, replyText,
-  voiceFailedMessage, canReplay, handsFree, autoPaused, coach, audioRef, analyser, flareKey, exiting,
-  onMainAction, onTalkInstead, onReplay, onToggleHandsFree, onClose,
+  lang, state, capturing, interim, pendingText, speechError, supported = true, lastSent, replyText, canSkipVoice = false,
+  voiceFailedMessage, turnFailed = false, canReplay, handsFree, autoPaused, coach, speechProgress, analyser,
+  flareKey, exiting, onMainAction, onTalkInstead, onReplay, onToggleHandsFree, onClose,
 }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
   const startedAt = useRef(Date.now());
@@ -201,14 +201,21 @@ export default function VoiceCallModal({
         : t("Sözünü bitirdiğinde Luna cevap verir.", "Luna answers when you finish."),
       action: heard ? t("Gönder", "Send") : t("Durdur", "Stop"),
     },
-    thinking: { title: t("Düşünüyorum", "Thinking"), hint: "", action: t("Bekle", "Wait") },
+    thinking: canSkipVoice
+      ? { title: t("Düşünüyorum", "Thinking"), hint: "", action: t("Yazılı göster", "Show as text") }
+      : { title: t("Düşünüyorum", "Thinking"), hint: "", action: t("Bekle", "Wait") },
     speaking: { title: t("Luna konuşuyor", "Luna is speaking"), hint: "", action: t("Araya gir", "Interrupt") },
     paused: {
       title: t("Luna durdu", "Luna paused"),
       hint: t("Kaldığı yerden devam etmek için dokun.", "Tap to continue where she stopped."),
       action: t("Devam et", "Resume"),
     },
-    readout: { title: t("Cevabımı yazdım", "Here's my answer in text"), hint: voiceFailedMessage, action: t("Konuş", "Talk") },
+    // (turnFailed: your words never reached her — there is no answer to show)
+    readout: {
+      title: turnFailed ? t("Cevap veremedim", "I couldn't answer") : t("Cevabımı yazdım", "Here's my answer in text"),
+      hint: voiceFailedMessage,
+      action: t("Konuş", "Talk"),
+    },
     error: !supported
       ? {
           title: t("Sesli görüşme bu tarayıcıda çalışmıyor", "Voice calls don't work in this browser"),
@@ -234,6 +241,18 @@ export default function VoiceCallModal({
                 "Allow the microphone from the site settings icon at the left of the address bar, then try again."),
           action: t("Tekrar dene", "Try again"),
         }
+      : speechError === "recorder-failed"
+      ? {
+          title: t("Ses kaydı başlatılamadı", "Couldn't start recording"),
+          hint: t("Mikrofonu başka bir uygulama kullanıyor olabilir. Onu kapatıp tekrar dene.", "Another app may be using the microphone. Close it and try again."),
+          action: t("Tekrar dene", "Try again"),
+        }
+      : speechError === "transcription-failed"
+      ? {
+          title: t("Sesini anlayamadım", "I couldn't make that out"),
+          hint: t("Biraz daha kısa ve net söyleyip tekrar dene.", "Say it a little shorter and clearer, then try again."),
+          action: t("Tekrar dene", "Try again"),
+        }
       : speechError === "audio-capture"
       ? {
           title: t("Mikrofon bulunamadı", "No microphone found"),
@@ -244,6 +263,14 @@ export default function VoiceCallModal({
       ? {
           title: t("Ses tanıma bağlantısı kurulamadı", "Couldn't reach speech recognition"),
           hint: t("İnternet bağlantını kontrol edip tekrar dene.", "Check your internet connection, then try again."),
+          action: t("Tekrar dene", "Try again"),
+        }
+      // The server-side recognizer (useSpeechRecognition's fallback) hit a
+      // usage limit: trying again right away would only hit it again.
+      : speechError === "quota"
+      ? {
+          title: t("Sesli kullanım sınırına ulaştın", "You've reached your voice limit"),
+          hint: t("Yazarak devam edebilir ya da biraz sonra tekrar deneyebilirsin.", "You can continue by text, or try again a bit later."),
           action: t("Tekrar dene", "Try again"),
         }
       : {
@@ -258,7 +285,7 @@ export default function VoiceCallModal({
   const mainAriaLabel = {
     idle: t("Konuşmaya başla", "Start talking"),
     listening: t("Konuşmayı bitir", "Finish talking"),
-    thinking: t("Luna düşünüyor", "Luna is thinking"),
+    thinking: canSkipVoice ? t("Sesi bekleme, cevabı yazılı göster", "Don't wait for the voice, show the answer as text") : t("Luna düşünüyor", "Luna is thinking"),
     speaking: t("Luna'nın sözünü kes ve konuş", "Interrupt Luna and talk"),
     paused: t("Luna'yı kaldığı yerden devam ettir", "Resume Luna"),
     readout: t("Konuşmaya başla", "Start talking"),
@@ -269,10 +296,10 @@ export default function VoiceCallModal({
   // read over Luna's voice or into the open mic.
   const liveText = state === "thinking" ? copy.title
     : state === "error" || state === "paused" ? `${copy.title}. ${copy.hint}`
-    : state === "readout" ? `${voiceFailedMessage} ${toSpoken(replyText)}`
+    : state === "readout" ? (turnFailed ? `${copy.title}. ${voiceFailedMessage}` : `${voiceFailedMessage} ${toSpoken(replyText)}`)
     : "";
 
-  const mainDisabled = state === "thinking" || !supported;
+  const mainDisabled = (state === "thinking" && !canSkipVoice) || !supported;
   const mainStyle = {
     idle: "bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_10px_40px_-6px_rgba(167,139,250,0.75)]",
     listening: "bg-[#eef3ff] text-indigo-800 shadow-[0_0_0_8px_rgba(207,224,255,0.14),0_10px_40px_-6px_rgba(207,224,255,0.6)]",
@@ -335,7 +362,7 @@ export default function VoiceCallModal({
             changes during the call (the moon's stage must not jump). */}
         <div className="relative mt-3 flex h-[7.75em] w-full max-w-[34ch] items-start justify-center overflow-hidden text-[17px] leading-[1.55] sm:max-w-[40ch] sm:text-lg [@media(max-height:560px)]:mt-1.5 [@media(max-height:560px)]:h-[4.65em] [@media(max-height:560px)]:text-[15px]">
           {state === "speaking" && replyText ? (
-            <SpokenCaption text={replyText} audioRef={audioRef} />
+            <SpokenCaption text={replyText} progress={speechProgress} />
           ) : state === "listening" && heard ? (
             // Newest words stay visible: long text overflows upward.
             <div className={`flex max-h-full flex-col justify-end overflow-hidden ${heard.length > 110 ? "[mask-image:linear-gradient(to_bottom,transparent,#000_1.6em)]" : ""}`}>
@@ -346,6 +373,8 @@ export default function VoiceCallModal({
             </div>
           ) : state === "thinking" && lastSent ? (
             <p key={lastSent} className="call-sent line-clamp-4 text-white/80 [@media(max-height:560px)]:line-clamp-3">“{lastSent}”</p>
+          ) : state === "readout" && turnFailed ? (
+            <p className="text-[0.9em] text-white/70 [text-wrap:pretty]">{voiceFailedMessage}</p>
           ) : state === "readout" ? (
             <div className="h-full w-full overflow-y-auto pb-[1.2em] text-left [mask-image:linear-gradient(to_bottom,#000_78%,transparent)] [scrollbar-width:thin]">
               {voiceFailedMessage && <p className="mb-2 text-center text-[0.85em] text-white/55">{voiceFailedMessage}</p>}

@@ -194,10 +194,12 @@ export default function Luna() {
   // speech callbacks below don't need to be recreated with it.
   const callRef = useRef(null);
 
-  const onSpeechResult = useCallback((text) => {
+  // meta: { turnId } when the phrase came from server-side recognition (the
+  // call's fallback engine) — the reply's voice then counts as the same turn.
+  const onSpeechResult = useCallback((text, meta) => {
     // In a call, phrases are gathered into one turn (sent after a short
     // silence); in the chat composer a phrase is sent right away, as before.
-    if (callRef.current?.handleFinal(text)) return;
+    if (callRef.current?.handleFinal(text, meta)) return;
     sttStopRef.current();
     if (text) handleSendRef.current(text);
   }, []);
@@ -214,11 +216,26 @@ export default function Luna() {
     quotaMessage,
     speech,
     sending,
-    sendTurn: (text) => handleSendRef.current(text, { voice: true }),
+    sendTurn: (text, opts) => handleSendRef.current(text, { voice: true, turnId: opts?.turnId }),
   });
   callRef.current = call;
 
   useReminderAlerts({ lang });
+
+  // The chat composer's mic has no screen of its own (the call shows its
+  // errors itself): say what went wrong instead of silently doing nothing.
+  const micErrorCtx = useRef({});
+  micErrorCtx.current = { t, inCall: call.active };
+  useEffect(() => {
+    const { t: tr, inCall } = micErrorCtx.current;
+    if (!speech.error || inCall) return;
+    const message = {
+      "not-allowed": tr("Mikrofon izni gerekli. Tarayıcının site ayarlarından Luna'ya izin ver.", "Microphone access is needed. Allow it for Luna in your browser's site settings."),
+      "audio-capture": tr("Mikrofon bulunamadı.", "No microphone found."),
+      quota: tr("Sesli kullanım sınırına ulaştın; yazarak devam edebilirsin.", "You've reached your voice limit; you can keep going by text."),
+    }[speech.error] || tr("Sesini alamadım, tekrar dener misin?", "I couldn't hear you. Could you try again?");
+    toast.error(message);
+  }, [speech.error]);
 
   // Switching mode always drops back to that mode's default thread — a
   // specific Sohbet picked in Arkadaş Modu shouldn't still be "open" after
@@ -260,7 +277,7 @@ export default function Luna() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paired, mode, conversationId]);
 
-  const handleSend = useCallback(async (text, { voice = false } = {}) => {
+  const handleSend = useCallback(async (text, { voice = false, turnId = null } = {}) => {
     const content = (typeof text === "string" ? text : input).trim();
     if (!content || sending) return;
     if (!voice) setInput("");
@@ -278,7 +295,7 @@ export default function Luna() {
       setMessages((m) => [...m, lunaMsg]);
       // Chat text replies stay silent by default — Luna only speaks while
       // the dedicated voice-call screen is open.
-      if (voice && callRef.current?.isLive()) callRef.current.onReply(lunaMsg, callGen);
+      if (voice && callRef.current?.isLive()) callRef.current.onReply(lunaMsg, callGen, turnId);
     } catch (e) {
       // Covers both a failed /api/chat call and a failed auth step inside
       // sendChat() (authHeaders() -> registerDevice(), which throws the
@@ -289,6 +306,8 @@ export default function Luna() {
       // `finally` below always clears `sending` so the input stays usable
       // for an immediate retry. The one exception is a usage limit (429),
       // whose curated message tells the user when they can continue.
+      // A turn spoken in the call is answered inside the call screen.
+      if (voice && callRef.current?.isLive() && callRef.current.onTurnFailed(e, callGen)) return;
       toast.error(
         quotaMessage(e) || t(
           "🌙 Şu an sana cevap verirken küçük bir sorun yaşadım. Biraz sonra tekrar deneyelim.",
@@ -512,7 +531,8 @@ export default function Luna() {
           lang={lang}
           messages={messages}
           sending={sending}
-          listening={listening}
+          // (the fallback recognizer is still turning your words into text)
+          listening={listening || speech.transcribing}
           interim={interim}
           input={input}
           setInput={setInput}

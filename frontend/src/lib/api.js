@@ -242,7 +242,9 @@ export async function sendChat({ message, mode, lang, conversationId, voice = fa
     // voice: this turn is spoken in the call — the backend asks for a short,
     // speakable reply (no markdown, lists or emoji).
     { text: message, mode: mode === "work" ? "work" : "friend", conversation_id: conversationId || null, voice, ...(mood ? { mood } : {}) },
-    { headers }
+    // A spoken turn must never leave the call waiting forever: replies take
+    // 2-4 s, so 45 s means something is stuck (the call then says so).
+    { headers, ...(voice ? { timeout: 45000 } : {}) }
   );
   return res.data.reply;
 }
@@ -416,15 +418,35 @@ export async function clearMessages(mode, conversationId = null) {
   await axios.delete(`${API}/messages`, { headers, params });
 }
 
-export async function fetchTTS({ text, mode }) {
+// Luna's voice for (a piece of) a reply, as a blob URL of MP3 audio. The
+// voice call asks for a reply sentence by sentence: `turnId` ties the pieces
+// (and the turn's speech recognition) together so the server counts ONE
+// voice use per turn; `part` is the piece's index. `signal` cancels it.
+export async function fetchTTS({ text, turnId, part = 0, signal } = {}) {
   const headers = await authHeaders();
   const voice = "coral";
-  const res = await axios.post(`${API}/tts`, { text, voice }, { headers });
+  const body = { text, voice, ...(turnId ? { turn_id: turnId, part } : {}) };
+  const res = await axios.post(`${API}/tts`, body, { headers, signal });
   const bytes = atob(res.data.audio_base64);
   const arr = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
   const blob = new Blob([arr], { type: "audio/mpeg" });
   return URL.createObjectURL(blob);
+}
+
+// Server-side speech recognition for one recorded utterance (the voice
+// call's fallback when the browser has no speech recognition of its own, or
+// it fails). Returns the text ("" when nothing was said). `turnId` as in
+// fetchTTS.
+export async function transcribeAudio(blob, { turnId, signal } = {}) {
+  const headers = await authHeaders();
+  const type = (blob.type || "").split(";")[0];
+  const ext = { "audio/mp4": "m4a", "audio/aac": "m4a", "audio/ogg": "ogg", "audio/wav": "wav", "audio/mpeg": "mp3" }[type] || "webm";
+  const form = new FormData();
+  form.append("audio", blob, `speech.${ext}`);
+  if (turnId) form.append("turn_id", turnId);
+  const res = await axios.post(`${API}/stt`, form, { headers, signal });
+  return (res.data?.text || "").trim();
 }
 
 export async function fetchMemories() {
