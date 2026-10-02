@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
-  Settings as SettingsIcon, User, Smartphone, Languages, Mail, ShieldCheck, Scale, MessageSquareX, Brain, UserX,
-  LogOut, Check, ChevronDown, Loader2,
+  User, Smartphone, Languages, Mail, ShieldCheck, Scale, MessageSquareX, Brain, UserX, LogOut, Check,
+  ChevronDown, Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
@@ -11,8 +11,9 @@ import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
 import { fetchProfile, updateProfile, signOut, deleteAccount, getReplyLang, setReplyLang } from "@/lib/api";
 import { LANGUAGES, langLabel } from "@/lib/languages";
 import { locale } from "@/lib/dates";
+import { GlyphTile } from "@/components/icons/GlyphTile";
 import {
-  Panel, PanelHeader, PanelBody, Segmented, SectionLabel, SkeletonList, ErrorState, ACCENTS, fieldClass, usePanelTitleId,
+  Panel, PanelHeader, PanelBody, Segmented, SectionLabel, SkeletonList, ErrorState, fieldClass, usePanelTitleId,
 } from "@/components/panel/Panel";
 
 const TONES = [
@@ -54,23 +55,15 @@ const apiError = (e, fallback) => {
   return typeof detail === "string" && detail ? detail : fallback;
 };
 
-function IconTile({ icon: Icon, accent = "violet" }) {
-  const tone = ACCENTS[accent] || ACCENTS.violet;
-  return (
-    <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: tone.tile }}>
-      <Icon size={17} style={{ color: tone.fg }} aria-hidden="true" />
-    </span>
-  );
-}
-
-// icon tile + title + one-line description + control. `stack` puts the
-// control under the text on phones (for wide controls like the language
-// picker); switches and short buttons stay on the right.
-function SettingRow({ icon, accent, title, titleFor, description, descriptionId, children, stack = false, alignTop = false }) {
+// Celestial glyph tile + title + one-line description + control. `hue` is a
+// GlyphTile hue family (danger rows are rose). `stack` puts the control under
+// the text on phones (for wide controls like the language picker); switches
+// and short buttons stay on the right.
+function SettingRow({ icon, hue = "violet", title, titleFor, description, descriptionId, children, stack = false, alignTop = false }) {
   const Title = titleFor ? "label" : "p";
   return (
     <div className="flex items-start gap-3 sm:gap-3.5 px-4 py-3.5">
-      <IconTile icon={icon} accent={accent} />
+      <GlyphTile icon={icon} hue={hue} size={36} />
       <div className={`min-w-0 flex-1 flex ${stack
         ? "flex-col gap-3 sm:flex-row sm:items-center sm:gap-4"
         : `gap-3 ${alignTop ? "items-start" : "items-center"}`}`}>
@@ -429,7 +422,7 @@ export default function SettingsPanel({
   return (
     <Panel onClose={closeAndFlush} size="lg" accent="violet" labelledBy={titleId} testId="settings-panel">
       <PanelHeader
-        icon={SettingsIcon}
+        glyph="settings"
         accent="violet"
         title={t("Ayarlar", "Settings")}
         subtitle={t("Profilin, Luna'nın tarzı ve gizlilik tercihlerin", "Your profile, Luna's style and your privacy choices")}
@@ -496,7 +489,7 @@ export default function SettingsPanel({
               <div className="relative border-t border-white/[0.06]">
                 <SettingRow
                   icon={Smartphone}
-                  accent={paired ? "emerald" : "sky"}
+                  hue={paired ? "emerald" : "sky"}
                   title={t("Telefon eşleşmesi", "Phone pairing")}
                   description={paired
                     ? t("Bu tarayıcı telefonundaki Luna'ya bağlı.", "This browser is linked to Luna on your phone.")
@@ -538,7 +531,7 @@ export default function SettingsPanel({
                 <div ref={langWrapRef}>
                   <SettingRow
                     icon={Languages}
-                    accent="sky"
+                    hue="sky"
                     title={t("Dil", "Language")}
                     description={t(
                       "Arayüz Türkçe veya İngilizce görünür; Luna seçtiğin dilde cevap verir.",
@@ -585,7 +578,7 @@ export default function SettingsPanel({
 
                 <SettingRow
                   icon={Mail}
-                  accent="emerald"
+                  hue="emerald"
                   title={t("Haftalık sohbet yedeği", "Weekly chat backup")}
                   titleFor={backupSwitchId}
                   descriptionId={backupDescId}
@@ -614,7 +607,7 @@ export default function SettingsPanel({
               <div className={`${cardClass} divide-y divide-white/[0.06]`}>
                 <SettingRow
                   icon={ShieldCheck}
-                  accent="violet"
+                  hue="violet"
                   title={t("Özel nitelikli veriler için açık rıza", "Explicit consent for special-category data")}
                   titleFor={consentSwitchId}
                   descriptionId={consentDescId}
@@ -637,7 +630,7 @@ export default function SettingsPanel({
                 </SettingRow>
                 <SettingRow
                   icon={Scale}
-                  accent="indigo"
+                  hue="indigo"
                   title={t("Yasal metinler", "Legal")}
                   description={
                     <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
@@ -658,7 +651,7 @@ export default function SettingsPanel({
               <div className="rounded-2xl border border-rose-400/[0.15] bg-rose-500/[0.04] divide-y divide-rose-300/[0.08]">
                 <SettingRow
                   icon={MessageSquareX}
-                  accent="rose"
+                  hue="rose"
                   title={t("Sohbet geçmişini temizle", "Clear chat history")}
                   description={t("Açık olan sohbetin mesajları silinir, anıların kalır.", "The open chat's messages are deleted; memories stay.")}
                 >
@@ -668,7 +661,7 @@ export default function SettingsPanel({
                 </SettingRow>
                 <SettingRow
                   icon={Brain}
-                  accent="rose"
+                  hue="rose"
                   title={t("Tüm anıları sil", "Delete all memories")}
                   description={t("Anılarım'daki tüm anılar kalıcı olarak silinir.", "Every memory in My Memories is permanently deleted.")}
                 >
@@ -678,7 +671,7 @@ export default function SettingsPanel({
                 </SettingRow>
                 <SettingRow
                   icon={UserX}
-                  accent="rose"
+                  hue="rose"
                   title={t("Hesabımı sil", "Delete my account")}
                   description={t("Hesabın ve ona bağlı verilerin kalıcı olarak silinir.", "Your account and the data tied to it are permanently deleted.")}
                 >

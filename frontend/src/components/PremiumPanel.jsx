@@ -1,6 +1,8 @@
 import { useEffect, useId, useState } from "react";
-import { X, Crown, Check, Sparkles, ChevronLeft } from "lucide-react";
+import { X, Check, Sparkles, ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
+import { IconTile } from "@/components/icons/LunaIcon";
+import { GlowIcon } from "@/components/icons/GlyphTile";
 import { fetchSubscription, selectPlan, checkoutSubscription, cancelSubscription, fetchProfile, SALES_DOCS_VERSION } from "@/lib/api";
 import CheckoutModal from "@/components/CheckoutModal";
 import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
@@ -140,8 +142,8 @@ export default function PremiumPanel({ lang, onClose }) {
       onClick={onClose} data-testid="premium-panel">
       <div onClick={(e) => e.stopPropagation()} className="w-full max-w-3xl">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="flex items-center gap-2 text-xl font-bold text-white">
-            <Crown size={22} className="text-amber-300" /> {t("Luna Premium", "Luna Premium")}
+          <h2 className="flex items-center gap-3 text-xl font-bold text-white">
+            <IconTile name="premium" size={40} /> {t("Luna Premium", "Luna Premium")}
           </h2>
           <button onClick={onClose} data-testid="premium-close-button"
             className="w-9 h-9 rounded-full flex items-center justify-center text-white/50 hover:text-white hover:bg-white/5">
@@ -264,7 +266,7 @@ export default function PremiumPanel({ lang, onClose }) {
                     }}>
                     {isPlus && (
                       <span className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 text-[10px] font-bold px-3 py-1 rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white">
-                        <Sparkles size={10} /> {t("ÖNERİLEN", "RECOMMENDED")}
+                        <GlowIcon icon={Sparkles} hue="amber" size={12} /> {t("ÖNERİLEN", "RECOMMENDED")}
                       </span>
                     )}
                     <h3 className="text-sm font-bold text-white mt-2">{plan.name}</h3>
@@ -277,7 +279,7 @@ export default function PremiumPanel({ lang, onClose }) {
                     <ul className="space-y-2 mb-5 flex-1">
                       {plan.features.map((f) => (
                         <li key={f} className="flex items-start gap-2 text-xs text-white/70">
-                          <Check size={13} className="text-emerald-400 shrink-0 mt-0.5" /> {f}
+                          <GlowIcon icon={Check} hue="emerald" size={14} className="mt-px" /> {f}
                         </li>
                       ))}
                     </ul>

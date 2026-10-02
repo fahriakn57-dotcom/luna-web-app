@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { X, MessageSquare, Plus, Trash2 } from "lucide-react";
+import { X, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { IconTile } from "@/components/icons/LunaIcon";
 import { fetchConversations, createConversation, deleteConversation } from "@/lib/api";
 
 function relTime(iso, lang) {
@@ -66,8 +67,8 @@ export default function ConversationsPanel({ lang, mode, activeConversationId, o
         className="w-full max-w-md rounded-3xl border border-purple-400/20 p-6 max-h-[85vh] flex flex-col"
         style={{ backgroundColor: "#0c0818", boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="flex items-center gap-2 text-base font-bold text-white">
-            <MessageSquare size={17} className="text-purple-300" /> {t("Sohbetlerim", "My Chats")}
+          <h2 className="flex items-center gap-3 text-base font-bold text-white">
+            <IconTile name="chats" size={40} /> {t("Sohbetlerim", "My Chats")}
           </h2>
           <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5">
             <X size={16} />
@@ -84,7 +85,10 @@ export default function ConversationsPanel({ lang, mode, activeConversationId, o
           {loading ? (
             <p className="text-xs text-white/40 text-center py-6">{t("Yükleniyor...", "Loading...")}</p>
           ) : conversations.length === 0 ? (
-            <p className="text-xs text-white/40 text-center py-6">{t("Henüz bir sohbetin yok.", "No chats yet.")}</p>
+            <div className="flex flex-col items-center gap-3 py-6">
+              <IconTile name="chats" size={56} />
+              <p className="text-sm text-white/50 text-center">{t("Henüz bir sohbetin yok.", "No chats yet.")}</p>
+            </div>
           ) : conversations.map((c) => {
             const active = c.id === activeConversationId;
             return (

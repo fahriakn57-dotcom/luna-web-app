@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
-import { Activity, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { Panel, PanelHeader, PanelBody, SectionLabel, ghostButtonClass, usePanelTitleId } from "@/components/panel/Panel";
 import { addDays, dayKey, formatDate, locale } from "@/lib/dates";
 
@@ -208,7 +208,7 @@ export default function MoodPanel({ lang, mood, setMood, onClose }) {
   return (
     <Panel onClose={onClose} size="md" accent={accent} labelledBy={titleId} testId="mood-modal">
       <PanelHeader
-        icon={Activity}
+        glyph="mood"
         accent={accent}
         title={t("Ruh halim", "My mood")}
         subtitle={t("Seçtiğin ruh hali bugünkü sohbetlerde Luna'ya iletilir.", "The mood you pick is shared with Luna in today's chats.")}

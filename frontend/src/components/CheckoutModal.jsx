@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { X, Lock } from "lucide-react";
+import { IconTile } from "@/components/icons/LunaIcon";
 
 // 2026-09-27: rewritten for PayTR (replaces iyzico's hosted-iframe embed —
 // see git history for the old IyzicoEmbed version). PayTR's card-storage +
@@ -52,7 +53,10 @@ export default function CheckoutModal({ lang, formFields, order, onClose }) {
         className="w-full max-w-md rounded-3xl border border-purple-400/20 p-5"
         style={{ backgroundColor: "#0c0818", boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
         <div className="flex items-center justify-between mb-3">
-          <p className="text-sm font-semibold text-white">{t("Güvenli Ödeme (PayTR)", "Secure Payment (PayTR)")}</p>
+          <div className="flex items-center gap-3 min-w-0">
+            <IconTile name="premium" size={40} />
+            <p className="text-sm font-semibold text-white">{t("Güvenli Ödeme (PayTR)", "Secure Payment (PayTR)")}</p>
+          </div>
           <button onClick={onClose} data-testid="checkout-close-button"
             className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5">
             <X size={16} />

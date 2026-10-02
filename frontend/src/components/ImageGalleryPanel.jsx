@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { X, Wand2, Trash2, Download, Loader2 } from "lucide-react";
+import { X, Trash2, Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { IconTile } from "@/components/icons/LunaIcon";
 import { fetchGeneratedImages, deleteGeneratedImage } from "@/lib/api";
 
 export default function ImageGalleryPanel({ lang, onClose }) {
@@ -37,8 +38,8 @@ export default function ImageGalleryPanel({ lang, onClose }) {
         className="w-full max-w-2xl rounded-3xl border border-purple-400/20 p-6 max-h-[85vh] flex flex-col"
         style={{ backgroundColor: "#0c0818", boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="flex items-center gap-2 text-base font-bold text-white">
-            <Wand2 size={17} className="text-fuchsia-300" /> {t("Ürettiklerim: Görsel", "My Generated Images")}
+          <h2 className="flex items-center gap-3 text-base font-bold text-white">
+            <IconTile name="images" size={40} /> {t("Ürettiklerim: Görsel", "My Generated Images")}
           </h2>
           <button onClick={onClose} data-testid="gallery-close-button"
             className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5">
@@ -53,8 +54,8 @@ export default function ImageGalleryPanel({ lang, onClose }) {
             ))}
           </div>
         ) : images.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-10">
-            <Wand2 size={28} className="text-purple-300/40" />
+          <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 py-10">
+            <IconTile name="images" size={56} className="mb-1" />
             <p className="text-sm text-white/50 max-w-xs">
               {t(
                 "Henüz bir görsel üretmedin. LunaWorks Modu'nda sohbet çubuğundaki ✨ butonuna basıp ne çizmemi istediğini yaz.",

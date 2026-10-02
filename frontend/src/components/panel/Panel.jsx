@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from "react";
 import { X, RefreshCw } from "lucide-react";
+import { IconTile } from "@/components/icons/LunaIcon";
 
 // Shared shell + building blocks for the sidebar panels (Günlük, Anılarım,
 // Ruh Halim, Günün Anlamı, Hobilerim, Hedefler, Notlar, Alarmlar, Kullanım,
@@ -107,12 +108,13 @@ export function Panel({ onClose, size = "md", accent = "violet", labelledBy, tes
   );
 }
 
-// Header: accent icon tile, title (+ optional subtitle), actions, close.
-export function PanelHeader({ icon: Icon, accent = "violet", title, subtitle, titleId, actions, onClose, closeLabel, closeTestId }) {
+// Header: icon tile, title (+ optional subtitle), actions, close. `glyph` is
+// one of Luna's own icons (components/icons) and wins over a plain `icon`.
+export function PanelHeader({ glyph, icon: Icon, accent = "violet", title, subtitle, titleId, actions, onClose, closeLabel, closeTestId }) {
   const tone = ACCENTS[accent] || ACCENTS.violet;
   return (
     <div className="flex items-start gap-3.5 px-5 sm:px-6 pt-4 sm:pt-6 pb-4 shrink-0">
-      {Icon && (
+      {glyph ? <IconTile name={glyph} size={40} /> : Icon && (
         <span className="w-10 h-10 rounded-[14px] flex items-center justify-center shrink-0"
           style={{ backgroundColor: tone.tile, boxShadow: `inset 0 0 0 1px ${tone.tile}` }}>
           <Icon size={19} style={{ color: tone.fg }} aria-hidden="true" />
@@ -222,12 +224,13 @@ export function SectionLabel({ children, action }) {
   );
 }
 
-// Empty state: an inviting next step, not just "nothing here".
-export function EmptyState({ icon: Icon, accent = "violet", title, body, action, compact }) {
+// Empty state: an inviting next step, not just "nothing here". `glyph` (one
+// of Luna's own icons) wins over a plain `icon`.
+export function EmptyState({ glyph, icon: Icon, accent = "violet", title, body, action, compact }) {
   const tone = ACCENTS[accent] || ACCENTS.violet;
   return (
     <div className={`flex flex-col items-center text-center ${compact ? "py-6" : "py-10"} px-4`}>
-      {Icon && (
+      {glyph ? <IconTile name={glyph} size={56} className="mb-4" /> : Icon && (
         <span className="relative w-14 h-14 rounded-2xl flex items-center justify-center mb-4"
           style={{ backgroundColor: tone.tile, boxShadow: `0 0 0 6px ${tone.tile.replace(/[\d.]+\)$/, "0.05)")}` }}>
           <Icon size={24} style={{ color: tone.fg }} aria-hidden="true" />

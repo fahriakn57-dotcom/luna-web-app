@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  StickyNote, Plus, Search, SearchX, X, Pencil, Trash2, Check, Copy, Loader2, ChevronDown,
-  FileText, User, Briefcase, Lightbulb, Star, Tag,
+  Plus, Search, X, Pencil, Trash2, Check, Copy, Loader2, ChevronDown, FileText, User, Briefcase,
+  Lightbulb, Star, Tag,
 } from "lucide-react";
 import { toast } from "sonner";
 import { fetchNotes, createNote, editNote, deleteNote } from "@/lib/api";
@@ -10,17 +10,32 @@ import {
   Panel, PanelHeader, PanelBody, IconButton, Chip, ChipRail, EmptyState, ErrorState,
   usePanelTitleId, fieldClass, primaryButtonClass, secondaryButtonClass,
 } from "@/components/panel/Panel";
+import { GlowIcon } from "@/components/icons/GlyphTile";
 import { relativeTime, formatDate, formatTime, locale } from "@/lib/dates";
 
+// Slate has no Celestial family; its 400 shade sits at the same depth.
+const SLATE = "148,163,184";
+
+// `rgb` tints the pill and its label; `hue` lights the glyph.
 const CATEGORY_META = {
-  genel: { tr: "Genel", en: "General", icon: FileText, rgb: "203,213,225" },
-  "kişisel": { tr: "Kişisel", en: "Personal", icon: User, rgb: "196,181,253" },
-  "iş": { tr: "İş", en: "Work", icon: Briefcase, rgb: "125,211,252" },
-  fikir: { tr: "Fikir", en: "Idea", icon: Lightbulb, rgb: "110,231,183" },
-  "önemli": { tr: "Önemli", en: "Important", icon: Star, rgb: "252,211,77" },
+  genel: { tr: "Genel", en: "General", icon: FileText, rgb: "203,213,225", hue: SLATE },
+  "kişisel": { tr: "Kişisel", en: "Personal", icon: User, rgb: "196,181,253", hue: "violet" },
+  "iş": { tr: "İş", en: "Work", icon: Briefcase, rgb: "125,211,252", hue: "sky" },
+  fikir: { tr: "Fikir", en: "Idea", icon: Lightbulb, rgb: "110,231,183", hue: "emerald" },
+  "önemli": { tr: "Önemli", en: "Important", icon: Star, rgb: "252,211,77", hue: "amber" },
 };
 const DEFAULT_CATEGORIES = Object.keys(CATEGORY_META);
-const CUSTOM_META = { icon: Tag, rgb: "203,213,225" };
+const CUSTOM_META = { icon: Tag, rgb: "203,213,225", hue: SLATE };
+
+// Chip draws its own `icon` in plain currentColor; hand it each category's
+// glyph already lit in the category's hue. Built once, so a re-render never
+// swaps the component (which would remount the icon).
+const litGlyph = (icon, hue) => function LitGlyph({ size }) {
+  return <GlowIcon icon={icon} hue={hue} size={size} />;
+};
+const CHIP_GLYPHS = Object.fromEntries(Object.entries(CATEGORY_META).map(([key, m]) => [key, litGlyph(m.icon, m.hue)]));
+const CUSTOM_CHIP_GLYPH = litGlyph(CUSTOM_META.icon, CUSTOM_META.hue);
+const chipGlyph = (key) => CHIP_GLYPHS[key] || CUSTOM_CHIP_GLYPH;
 
 // Same limits the backend enforces (notes.py): longer input is cut there.
 const TITLE_MAX = 150;
@@ -97,11 +112,11 @@ function useAutoGrow(ref, value, maxPx) {
 }
 
 function CategoryPill({ category, lang }) {
-  const { icon: Icon, rgb } = catMeta(category);
+  const { icon, rgb, hue } = catMeta(category);
   return (
     <span className="inline-flex items-center gap-1 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-5"
       style={{ color: `rgb(${rgb})`, backgroundColor: `rgba(${rgb},0.1)`, boxShadow: `inset 0 0 0 1px rgba(${rgb},0.16)` }}>
-      <Icon size={12} aria-hidden="true" />
+      <GlowIcon icon={icon} hue={hue} size={12} />
       {catLabel(category, lang)}
     </span>
   );
@@ -180,15 +195,12 @@ function NoteForm({
 
       <div className={framed ? `${pad} mt-3 border-t border-white/[0.06] pt-3` : "mt-4"}>
         <div role="group" aria-label={t("Kategori", "Category")} data-testid={ids.category} className="flex flex-wrap gap-1.5">
-          {categoryKeys.map((k) => {
-            const meta = catMeta(k);
-            return (
-              <Chip key={k} active={values.category === k} onClick={() => onChange((prev) => ({ ...prev, category: k }))}
-                icon={meta.icon} color={`rgb(${meta.rgb})`} testId={`${ids.category}-${slug(k)}`}>
-                {catLabel(k, lang)}
-              </Chip>
-            );
-          })}
+          {categoryKeys.map((k) => (
+            <Chip key={k} active={values.category === k} onClick={() => onChange((prev) => ({ ...prev, category: k }))}
+              icon={chipGlyph(k)} testId={`${ids.category}-${slug(k)}`}>
+              {catLabel(k, lang)}
+            </Chip>
+          ))}
         </div>
       </div>
 
@@ -674,7 +686,7 @@ export default function NotesPanel({ lang, onClose }) {
   );
   // Hidden while the composer is open — it already is the next step.
   const firstNote = (compact) => (adding ? null : (
-    <EmptyState compact={compact} icon={StickyNote} accent="indigo" title={t("İlk notunu yaz", "Write your first note")}
+    <EmptyState compact={compact} glyph="notes" accent="indigo" title={t("İlk notunu yaz", "Write your first note")}
       body={t("Aklına gelen fikirleri, listeleri, önemli bilgileri burada topla.",
         "Collect your ideas, lists and important details here.")}
       action={addButton(null, "note-empty-add")} />
@@ -704,7 +716,7 @@ export default function NotesPanel({ lang, onClose }) {
       );
     } else if (notes.length === 0 && shownQ) {
       results = (
-        <EmptyState compact icon={SearchX} accent="indigo"
+        <EmptyState compact glyph="notes" accent="indigo"
           title={t(`“${shownQ}” için not bulunamadı`, `No notes found for “${shownQ}”`)}
           body={t("Farklı bir kelimeyle dene.", "Try a different word.")}
           action={(
@@ -714,9 +726,8 @@ export default function NotesPanel({ lang, onClose }) {
           )} />
       );
     } else if (visible.length === 0 && cat !== "all") {
-      const CatIcon = catMeta(cat).icon;
       results = (
-        <EmptyState compact icon={CatIcon} accent="indigo"
+        <EmptyState compact glyph="notes" accent="indigo"
           title={shownQ
             ? t(`“${shownQ}” için ${catName} kategorisinde not yok`, `No ${catName} notes for “${shownQ}”`)
             : t(`${catName} kategorisinde not yok`, `No notes in ${catName}`)}
@@ -781,15 +792,12 @@ export default function NotesPanel({ lang, onClose }) {
               <Chip active={cat === "all"} onClick={() => filterBy("all")} count={notes.length} testId="note-filter-all">
                 {t("Tümü", "All")}
               </Chip>
-              {chipKeys.map((k) => {
-                const meta = catMeta(k);
-                return (
-                  <Chip key={k} active={cat === k} onClick={() => filterBy(cat === k ? "all" : k)}
-                    icon={meta.icon} color={`rgb(${meta.rgb})`} count={counts[k] || 0} testId={`note-filter-${slug(k)}`}>
-                    {catLabel(k, lang)}
-                  </Chip>
-                );
-              })}
+              {chipKeys.map((k) => (
+                <Chip key={k} active={cat === k} onClick={() => filterBy(cat === k ? "all" : k)}
+                  icon={chipGlyph(k)} count={counts[k] || 0} testId={`note-filter-${slug(k)}`}>
+                  {catLabel(k, lang)}
+                </Chip>
+              ))}
             </ChipRail>
           )}
         </div>
@@ -805,7 +813,7 @@ export default function NotesPanel({ lang, onClose }) {
 
   return (
     <Panel onClose={onClose} size="xl" accent="indigo" labelledBy={titleId} testId="notes-panel">
-      <PanelHeader icon={StickyNote} accent="indigo" title={t("Notlarım", "My notes")} subtitle={subtitle}
+      <PanelHeader glyph="notes" accent="indigo" title={t("Notlarım", "My notes")} subtitle={subtitle}
         titleId={titleId} onClose={onClose} closeLabel={t("Kapat", "Close")}
         actions={(
           <IconButton variant="primary" size={40} testId="note-add-toggle"

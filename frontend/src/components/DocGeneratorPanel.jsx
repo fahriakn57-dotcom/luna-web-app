@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { X, FileText, Table, FileType2, Presentation, Grid3x3, BarChart3, Trash2, Download, Loader2, Sparkles } from "lucide-react";
+import { X, Trash2, Download, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { IconTile } from "@/components/icons/LunaIcon";
 import {
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
   fetchGeneratedPdfs, fetchGeneratedExcels, fetchGeneratedWords, fetchGeneratedPpts, fetchGeneratedTableImages, fetchGeneratedCharts,
@@ -9,10 +10,12 @@ import {
 
 // One panel, four flavors — "Ürettiklerim: PDF / Excel / Word / PowerPoint"
 // are the exact same form + list layout, only the generate/fetch/delete
-// calls, icon, accent color and a couple of labels differ per kind.
+// calls, button gradient and a couple of labels differ per kind. The icon is
+// Luna's own Celestial one, keyed by `kind` itself (pdf, excel, word, ppt,
+// table, chart), so it matches the sidebar row that opened the panel.
 const KIND_CONFIG = {
   pdf: {
-    Icon: FileText, accent: "text-rose-300", gradient: "linear-gradient(90deg,#f43f5e,#c084fc)", ext: "pdf",
+    gradient: "linear-gradient(90deg,#f43f5e,#c084fc)", ext: "pdf",
     title: { tr: "Ürettiklerim: PDF", en: "My Generated PDFs" },
     generateLabel: { tr: "PDF Oluştur", en: "Generate PDF" },
     placeholder: {
@@ -22,7 +25,7 @@ const KIND_CONFIG = {
     generate: generatePdf, fetchFiles: fetchGeneratedPdfs, deleteFile: deleteGeneratedPdf,
   },
   excel: {
-    Icon: Table, accent: "text-emerald-300", gradient: "linear-gradient(90deg,#10b981,#6366f1)", ext: "xlsx",
+    gradient: "linear-gradient(90deg,#10b981,#6366f1)", ext: "xlsx",
     title: { tr: "Ürettiklerim: Excel", en: "My Generated Excel Files" },
     generateLabel: { tr: "Excel Oluştur", en: "Generate Excel" },
     placeholder: {
@@ -32,7 +35,7 @@ const KIND_CONFIG = {
     generate: generateExcel, fetchFiles: fetchGeneratedExcels, deleteFile: deleteGeneratedExcel,
   },
   word: {
-    Icon: FileType2, accent: "text-sky-300", gradient: "linear-gradient(90deg,#0ea5e9,#6366f1)", ext: "docx",
+    gradient: "linear-gradient(90deg,#0ea5e9,#6366f1)", ext: "docx",
     title: { tr: "Ürettiklerim: Word", en: "My Generated Word Docs" },
     generateLabel: { tr: "Word Belgesi Oluştur", en: "Generate Word Doc" },
     placeholder: {
@@ -42,7 +45,7 @@ const KIND_CONFIG = {
     generate: generateWord, fetchFiles: fetchGeneratedWords, deleteFile: deleteGeneratedWord,
   },
   ppt: {
-    Icon: Presentation, accent: "text-amber-300", gradient: "linear-gradient(90deg,#f59e0b,#ef4444)", ext: "pptx",
+    gradient: "linear-gradient(90deg,#f59e0b,#ef4444)", ext: "pptx",
     title: { tr: "Ürettiklerim: PowerPoint", en: "My Generated Slides" },
     generateLabel: { tr: "Sunum Oluştur", en: "Generate Slides" },
     placeholder: {
@@ -52,7 +55,7 @@ const KIND_CONFIG = {
     generate: generatePpt, fetchFiles: fetchGeneratedPpts, deleteFile: deleteGeneratedPpt,
   },
   table: {
-    Icon: Grid3x3, accent: "text-violet-300", gradient: "linear-gradient(90deg,#8b5cf6,#6366f1)", ext: "png",
+    gradient: "linear-gradient(90deg,#8b5cf6,#6366f1)", ext: "png",
     title: { tr: "Ürettiklerim: Tablo", en: "My Generated Tables" },
     generateLabel: { tr: "Tablo Oluştur", en: "Generate Table" },
     placeholder: {
@@ -62,7 +65,7 @@ const KIND_CONFIG = {
     generate: generateTableImage, fetchFiles: fetchGeneratedTableImages, deleteFile: deleteGeneratedTableImage,
   },
   chart: {
-    Icon: BarChart3, accent: "text-orange-300", gradient: "linear-gradient(90deg,#f97316,#eab308)", ext: "png",
+    gradient: "linear-gradient(90deg,#f97316,#eab308)", ext: "png",
     title: { tr: "Ürettiklerim: Grafik", en: "My Generated Charts" },
     generateLabel: { tr: "Grafik Oluştur", en: "Generate Chart" },
     placeholder: {
@@ -76,7 +79,7 @@ const KIND_CONFIG = {
 export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
   const cfg = KIND_CONFIG[kind];
-  const { Icon, accent, gradient, ext: fileExt } = cfg;
+  const { gradient, ext: fileExt } = cfg;
   const panelTitle = t(cfg.title.tr, cfg.title.en);
   const generateLabel = t(cfg.generateLabel.tr, cfg.generateLabel.en);
   const dataPlaceholder = t(cfg.placeholder.tr, cfg.placeholder.en);
@@ -139,8 +142,8 @@ export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
         className="w-full max-w-2xl rounded-3xl border border-purple-400/20 p-6 max-h-[85vh] flex flex-col"
         style={{ backgroundColor: "#0c0818", boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
         <div className="flex items-center justify-between mb-4 shrink-0">
-          <h2 className="flex items-center gap-2 text-base font-bold text-white">
-            <Icon size={17} className={accent} /> {panelTitle}
+          <h2 className="flex items-center gap-3 text-base font-bold text-white">
+            <IconTile name={kind} size={40} /> {panelTitle}
           </h2>
           <button onClick={onClose} data-testid="doc-gen-close-button"
             className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5">
@@ -181,8 +184,8 @@ export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
             {[0, 1, 2].map((i) => <div key={i} className="h-14 rounded-xl bg-white/5 animate-pulse" />)}
           </div>
         ) : files.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-center gap-2 py-6">
-            <Icon size={26} className={`${accent} opacity-40`} />
+          <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 py-6">
+            <IconTile name={kind} size={56} className="mb-1" />
             <p className="text-sm text-white/50 max-w-xs">
               {t("Henüz bir şey üretmedin. Yukarıya veri yapıştırıp başlayabilirsin.", "You haven't generated anything yet. Paste some data above to get started.")}
             </p>
@@ -193,7 +196,7 @@ export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
               <div key={f.id} data-testid="doc-gen-file-row"
                 className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
                 <div className="flex items-center gap-3 min-w-0">
-                  <Icon size={16} className={`${accent} shrink-0`} />
+                  <IconTile name={kind} size={28} />
                   <span className="text-sm text-white/85 truncate">{f.title || t("İsimsiz", "Untitled")}</span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  AudioLines, CalendarDays, CalendarRange, Gauge, Info, InfinityIcon, MessageCircle, RefreshCw, Sparkles,
+  AudioLines, CalendarDays, CalendarRange, Info, InfinityIcon, MessageCircle, RefreshCw, Sparkles,
 } from "lucide-react";
 import { fetchUsage } from "@/lib/api";
+import { GlowIcon, GlyphTile } from "@/components/icons/GlyphTile";
 import {
   Panel, PanelHeader, PanelBody, IconButton, SectionLabel, EmptyState, ErrorState, ACCENTS,
   primaryButtonClass, secondaryButtonClass, usePanelTitleId,
@@ -24,14 +25,16 @@ const PLANS = {
   unlimited: { tr: "Sınırsız", en: "Unlimited", tier: "unlimited", accent: "indigo", phase: 1 },
 };
 
+// `hue`: the row's Celestial glyph colour — messages share the chats violet,
+// voice and the quota windows the panel's own teal.
 const DAILY = [
-  { key: "chat", icon: MessageCircle, tr: "Mesajlar", en: "Messages", unitTr: "mesaj", oneEn: "message", manyEn: "messages" },
-  { key: "voice", icon: AudioLines, tr: "Sesli yanıtlar", en: "Voice replies", unitTr: "sesli yanıt", oneEn: "voice reply", manyEn: "voice replies" },
+  { key: "chat", icon: MessageCircle, hue: "violet", tr: "Mesajlar", en: "Messages", unitTr: "mesaj", oneEn: "message", manyEn: "messages" },
+  { key: "voice", icon: AudioLines, hue: "teal", tr: "Sesli yanıtlar", en: "Voice replies", unitTr: "sesli yanıt", oneEn: "voice reply", manyEn: "voice replies" },
 ];
 
 const QUOTAS = [
-  { key: "week", icon: CalendarDays, tr: "Son 7 gün", en: "Last 7 days" },
-  { key: "month", icon: CalendarRange, tr: "Son 30 gün", en: "Last 30 days" },
+  { key: "week", icon: CalendarDays, hue: "teal", tr: "Son 7 gün", en: "Last 7 days" },
+  { key: "month", icon: CalendarRange, hue: "teal", tr: "Son 30 gün", en: "Last 30 days" },
 ];
 
 const SEVERITY = {
@@ -200,12 +203,9 @@ function PlanCard({ plan, description, onOpenPremium, t }) {
   );
 }
 
-function RowIcon({ icon: Icon }) {
-  return (
-    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-white/[0.05] text-white/70 ring-1 ring-inset ring-white/[0.06]">
-      <Icon size={16} aria-hidden="true" />
-    </span>
-  );
+// 32px so the meters below keep lining up with the text (pl-11).
+function RowIcon({ row }) {
+  return <GlyphTile icon={row.icon} hue={row.hue} size={32} />;
 }
 
 function Meter({ pct, label, valueText }) {
@@ -236,13 +236,13 @@ function DailyRow({ row, counter, resetAt, now, fmt, lang, t }) {
     else today = <>{n} {counter.used === 1 ? row.oneEn : row.manyEn} today</>;
     return (
       <li className="flex items-center gap-3 p-4" data-testid={testId}>
-        <RowIcon icon={row.icon} />
+        <RowIcon row={row} />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-white">{label}</p>
           <p className="mt-0.5 text-xs text-white/50">{today}</p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-teal-300/20 bg-teal-300/[0.08] px-2 py-1 text-[11px] font-medium leading-none text-teal-100/90">
-          <InfinityIcon size={13} aria-hidden="true" />
+          <GlowIcon icon={InfinityIcon} hue="teal" size={13} />
           {t("Günlük sınır yok", "No daily limit")}
         </span>
       </li>
@@ -254,7 +254,7 @@ function DailyRow({ row, counter, resetAt, now, fmt, lang, t }) {
   return (
     <li className="p-4" data-testid={testId}>
       <div className="flex items-center gap-3">
-        <RowIcon icon={row.icon} />
+        <RowIcon row={row} />
         <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{label}</p>
         <p className="shrink-0 text-sm tabular-nums text-white/40">
           <span className="font-semibold text-white">{fmt.num(counter.used)}</span> / {fmt.num(counter.limit)}
@@ -284,7 +284,7 @@ function QuotaRow({ row, pct, fmt, t }) {
   return (
     <li className="p-4" data-testid={`usage-row-quota-${row.key}`}>
       <div className="flex items-center gap-3">
-        <RowIcon icon={row.icon} />
+        <RowIcon row={row} />
         <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{label}</p>
         <span className={`shrink-0 text-sm font-semibold tabular-nums ${level === "low" ? "text-white" : SEVERITY[level].text}`}>
           {fmt.pct(pct)}
@@ -485,7 +485,7 @@ export default function UsagePanel({ lang, onClose, onOpenPremium }) {
               {quotas.map(({ row, pct }) => <QuotaRow key={row.key} row={row} pct={pct} fmt={fmt} t={t} />)}
             </ul>
             <p className="mt-2.5 flex items-start gap-2 px-1 text-xs leading-relaxed text-white/40">
-              <Info size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <GlowIcon icon={Info} hue="teal" size={13} className="mt-0.5 opacity-80" />
               {t(
                 "Kota kayan bir pencereyle hesaplanır: eski kullanımlar süresi doldukça düşer, sabit bir sıfırlanma saati yoktur.",
                 "The quota uses a rolling window: older usage drops off as it ages, so there's no fixed reset time.",
@@ -495,7 +495,7 @@ export default function UsagePanel({ lang, onClose, onOpenPremium }) {
         )}
 
         {counters.length === 0 && quotas.length === 0 && (
-          <EmptyState compact icon={Gauge} accent="teal"
+          <EmptyState compact glyph="usage" accent="teal"
             title={t("Sayaçlar henüz hazır değil", "Usage isn't available yet")}
             body={t("Birazdan yenilemeyi dene.", "Try refreshing in a moment.")} />
         )}
@@ -516,7 +516,7 @@ export default function UsagePanel({ lang, onClose, onOpenPremium }) {
   return (
     <Panel onClose={onClose} size="md" accent="teal" labelledBy={titleId} testId="usage-modal">
       <PanelHeader
-        icon={Gauge}
+        glyph="usage"
         accent="teal"
         title={t("Kullanım", "Usage")}
         subtitle={t("Planın ve bugünkü kullanımın", "Your plan and today's usage")}

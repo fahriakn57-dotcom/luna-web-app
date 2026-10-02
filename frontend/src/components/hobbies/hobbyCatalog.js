@@ -12,22 +12,26 @@ import {
 } from "lucide-react";
 
 // Hobby catalog for the Hobilerim panel: categories, ~90 suggestions and the
-// keyword rules that give a typed-in hobby a fitting icon. Colours are
-// "r,g,b" strings (Tailwind 300 tones) so tiles can mix their own alphas.
+// keyword rules that give a typed-in hobby a fitting icon. Each category has
+// two colours: `rgb`, an "r,g,b" Tailwind 300 tone for soft tints (selected
+// tiles, check badges), and `hue`, the Celestial hue family its glyphs glow
+// in (GlyphTile/GlowIcon) — a family name, or an "r,g,b" where the set has
+// no family (lime).
 
 export const DEFAULT_RGB = "240,171,252"; // fuchsia — the panel accent
+export const DEFAULT_HUE = "fuchsia";
 
 export const CATEGORIES = [
-  { key: "sport", tr: "Spor ve hareket", en: "Sports and movement", shortTr: "Spor", shortEn: "Sports", icon: Dumbbell, rgb: "110,231,183" },
-  { key: "art", tr: "Sanat ve üretim", en: "Arts and making", shortTr: "Sanat", shortEn: "Arts", icon: Palette, rgb: "253,164,175" },
-  { key: "music", tr: "Müzik", en: "Music", shortTr: "Müzik", shortEn: "Music", icon: Music, rgb: "240,171,252" },
-  { key: "tech", tr: "Teknoloji", en: "Technology", shortTr: "Teknoloji", shortEn: "Tech", icon: Cpu, rgb: "125,211,252" },
-  { key: "games", tr: "Oyun ve eğlence", en: "Games and fun", shortTr: "Eğlence", shortEn: "Fun", icon: Gamepad2, rgb: "165,180,252" },
-  { key: "nature", tr: "Doğa ve seyahat", en: "Nature and travel", shortTr: "Doğa", shortEn: "Outdoors", icon: Compass, rgb: "94,234,212" },
-  { key: "culture", tr: "Kültür ve öğrenme", en: "Culture and learning", shortTr: "Kültür", shortEn: "Culture", icon: BookOpen, rgb: "252,211,77" },
-  { key: "home", tr: "Mutfak ve yaşam", en: "Food and home", shortTr: "Mutfak", shortEn: "Food", icon: ChefHat, rgb: "253,186,116" },
-  { key: "growth", tr: "Kişisel gelişim", en: "Personal growth", shortTr: "Gelişim", shortEn: "Growth", icon: Sprout, rgb: "190,242,100" },
-  { key: "social", tr: "Sosyal", en: "Social", shortTr: "Sosyal", shortEn: "Social", icon: Users, rgb: "196,181,253" },
+  { key: "sport", tr: "Spor ve hareket", en: "Sports and movement", shortTr: "Spor", shortEn: "Sports", icon: Dumbbell, rgb: "110,231,183", hue: "emerald" },
+  { key: "art", tr: "Sanat ve üretim", en: "Arts and making", shortTr: "Sanat", shortEn: "Arts", icon: Palette, rgb: "253,164,175", hue: "rose" },
+  { key: "music", tr: "Müzik", en: "Music", shortTr: "Müzik", shortEn: "Music", icon: Music, rgb: "240,171,252", hue: "fuchsia" },
+  { key: "tech", tr: "Teknoloji", en: "Technology", shortTr: "Teknoloji", shortEn: "Tech", icon: Cpu, rgb: "125,211,252", hue: "sky" },
+  { key: "games", tr: "Oyun ve eğlence", en: "Games and fun", shortTr: "Eğlence", shortEn: "Fun", icon: Gamepad2, rgb: "165,180,252", hue: "indigo" },
+  { key: "nature", tr: "Doğa ve seyahat", en: "Nature and travel", shortTr: "Doğa", shortEn: "Outdoors", icon: Compass, rgb: "94,234,212", hue: "teal" },
+  { key: "culture", tr: "Kültür ve öğrenme", en: "Culture and learning", shortTr: "Kültür", shortEn: "Culture", icon: BookOpen, rgb: "252,211,77", hue: "amber" },
+  { key: "home", tr: "Mutfak ve yaşam", en: "Food and home", shortTr: "Mutfak", shortEn: "Food", icon: ChefHat, rgb: "253,186,116", hue: "orange" },
+  { key: "growth", tr: "Kişisel gelişim", en: "Personal growth", shortTr: "Gelişim", shortEn: "Growth", icon: Sprout, rgb: "190,242,100", hue: "163,230,53" },
+  { key: "social", tr: "Sosyal", en: "Social", shortTr: "Sosyal", shortEn: "Social", icon: Users, rgb: "196,181,253", hue: "violet" },
 ];
 
 export const CATEGORY_BY_KEY = Object.fromEntries(CATEGORIES.map((c) => [c.key, c]));
@@ -328,8 +332,9 @@ function bestRule(folded) {
   return best;
 }
 
-// Icon + category for any hobby name: catalog entries keep their own icon,
-// typed ones go through the keyword rules, anything else gets Sparkles.
+// Icon, category and colours for any hobby name: catalog entries keep their
+// own icon, typed ones go through the keyword rules, anything else gets
+// Sparkles.
 export function hobbyVisual(name) {
   const folded = fold(name);
   const known = ITEM_BY_KEY.get(folded);
@@ -339,6 +344,7 @@ export function hobbyVisual(name) {
     icon: match ? match.icon : Sparkles,
     category,
     rgb: category ? category.rgb : DEFAULT_RGB,
+    hue: category ? category.hue : DEFAULT_HUE,
   };
 }
 

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Bell, BellOff, BellRing, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Plus, Repeat, Trash2, X } from "lucide-react";
+import { AlarmClock, Bell, BellOff, BellRing, ChevronLeft, ChevronRight, Loader2, Plus, Repeat, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { fetchReminders, createReminder, cancelReminder } from "@/lib/api";
+import { GlowIcon, GlyphTile } from "@/components/icons/GlyphTile";
 import {
   Panel, PanelHeader, PanelBody, IconButton, Chip, Segmented, SectionLabel, EmptyState, SkeletonList, ErrorState,
   usePanelTitleId, fieldClass, primaryButtonClass, secondaryButtonClass, ghostButtonClass,
@@ -301,7 +302,7 @@ function RecurrencePill({ t, recurrence }) {
   if (!label || recurrence === "none") return null;
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-sky-400/10 px-2 py-0.5 text-[11px] font-medium text-sky-200">
-      <Repeat size={11} aria-hidden="true" />
+      <GlowIcon icon={Repeat} hue="sky" size={12} />
       {t(label[0], label[1])}
     </span>
   );
@@ -354,14 +355,14 @@ function UpcomingList({ t, lang, items, nowMs, loading, onPick }) {
           <li key={o.key}>
             <button type="button" onClick={() => onPick(dayKey(o.at))} data-testid="reminder-upcoming-item"
               className="flex min-h-[52px] w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-white/[0.04] focus-visible:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-300/60">
-              <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-sky-300 shadow-[0_0_0_3px_rgba(125,211,252,0.12)]" />
+              <GlowIcon icon={AlarmClock} hue="sky" size={15} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium text-white/85">{o.reminder.text}</span>
                 <span className="mt-0.5 flex items-center gap-1.5 text-xs tabular-nums text-sky-200/75">
                   {untilLabel(o.at, nowMs, lang)}
                   {isRecurring(o.reminder) && (
                     <>
-                      <Repeat size={11} aria-hidden="true" className="text-sky-200/50" />
+                      <GlowIcon icon={Repeat} hue="sky" size={12} className="opacity-70" />
                       <span className="sr-only">{t(RECURRENCE[o.reminder.recurrence][0], RECURRENCE[o.reminder.recurrence][1])}</span>
                     </>
                   )}
@@ -487,9 +488,7 @@ function NotifyBanner({ t, onAllow, onDismiss }) {
   return (
     <div data-testid="reminder-notify-banner"
       className="mb-5 flex items-start gap-3 rounded-2xl border border-sky-300/15 bg-sky-400/[0.06] py-3.5 pl-3.5 pr-2">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-400/[0.12]">
-        <BellRing size={16} aria-hidden="true" className="text-sky-200" />
-      </span>
+      <GlyphTile icon={BellRing} hue="sky" size={36} />
       <div className="min-w-0 flex-1 sm:flex sm:items-center sm:gap-4">
         <p className="pt-0.5 text-[13px] leading-snug text-white/60 sm:flex-1 sm:pt-0">
           <span className="font-medium text-white/90">{t("Hatırlatmalar Luna açıkken ekranda çıkar.", "Reminders appear on screen while Luna is open.")}</span>{" "}
@@ -506,14 +505,19 @@ function NotifyBanner({ t, onAllow, onDismiss }) {
   );
 }
 
+// The bell's hue follows the notification state: sky (on screen only),
+// emerald (notifications on), amber (blocked by the browser).
 function DeliveryNote({ t, permission, onAllow }) {
   let Icon = Bell;
+  let hue = "sky";
   let text = t("Hatırlatmalar Luna açıkken ekranda çıkar.", "Reminders appear on screen while Luna is open.");
   if (permission === "granted") {
     Icon = BellRing;
+    hue = "emerald";
     text = t("Hatırlatmalar Luna açıkken ekranda ve bildirim olarak çıkar.", "Reminders appear on screen and as notifications while Luna is open.");
   } else if (permission === "denied") {
     Icon = BellOff;
+    hue = "amber";
     text = t(
       "Tarayıcın bu site için bildirimleri engelliyor; hatırlatmalar Luna açıkken yine ekranda çıkar. İzni adres çubuğundaki site ayarlarından açabilirsin.",
       "Your browser blocks notifications for this site; reminders still appear on screen while Luna is open. You can allow them in the site settings next to the address bar.",
@@ -521,7 +525,7 @@ function DeliveryNote({ t, permission, onAllow }) {
   }
   return (
     <div className="mt-6 flex items-start gap-2 text-xs leading-relaxed text-white/40" data-testid="reminder-delivery-note">
-      <Icon size={14} aria-hidden="true" className="mt-0.5 shrink-0" />
+      <GlowIcon icon={Icon} hue={hue} size={14} className="mt-0.5 opacity-80" />
       <p>
         {text}
         {permission === "default" && (
@@ -821,7 +825,7 @@ export default function RemindersPanel({ lang, onClose }) {
   } else if (!composerOpen) {
     agendaContent = (
       <div className="rounded-2xl border border-dashed border-white/[0.08]">
-        <EmptyState icon={CalendarPlus} accent="sky" compact
+        <EmptyState glyph="alarms" accent="sky" compact
           title={t("Bu gün için hatırlatma yok", "No reminders for this day")}
           body={isPastDay
             ? t("Geçmiş bir gün. Yeni hatırlatmayı bugün ya da ileri bir tarih için kurabilirsin.", "This day has passed. You can set a new reminder for today or a later date.")
@@ -845,7 +849,7 @@ export default function RemindersPanel({ lang, onClose }) {
   return (
     <Panel onClose={onClose} size="2xl" accent="sky" labelledBy={titleId} testId="reminders-panel">
       <PanelHeader
-        icon={Bell}
+        glyph="alarms"
         accent="sky"
         title={t("Alarmlar", "Reminders")}
         subtitle={t("Takvimden bir gün seç, saatli hatırlatma kur.", "Pick a day on the calendar and set a timed reminder.")}

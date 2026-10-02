@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { CalendarHeart, Flag, Globe, Info, Palette, RefreshCw, ScrollText, Sparkles } from "lucide-react";
+import { Flag, Globe, Info, Palette, RefreshCw, ScrollText, Sparkles } from "lucide-react";
 import { fetchDayInfo } from "@/lib/api";
+import { GlowIcon, GlyphTile } from "@/components/icons/GlyphTile";
 import { Panel, PanelHeader, PanelBody, SectionLabel, EmptyState, ErrorState, ACCENTS, secondaryButtonClass, usePanelTitleId } from "@/components/panel/Panel";
 import { dayKey, locale } from "@/lib/dates";
 
+// `accent` doubles as the GlyphTile hue family of the kind's icon.
 const KINDS = {
   international: { icon: Globe, accent: "sky", tr: "Uluslararası gün", en: "International day" },
   national: { icon: Flag, accent: "rose", tr: "Türkiye", en: "Türkiye" },
@@ -150,13 +152,9 @@ export default function DayInfoPanel({ lang, onClose }) {
           {items.map((it, i) => {
             const kind = KINDS[it.kind];
             const tone = ACCENTS[kind.accent];
-            const Icon = kind.icon;
             return (
               <li key={`${i}-${it.title}`} className="flex gap-3.5 py-4 first:pt-1" data-testid="day-info-item">
-                <span className="mt-0.5 w-9 h-9 shrink-0 rounded-xl flex items-center justify-center"
-                  style={{ backgroundColor: tone.tile, boxShadow: `inset 0 0 0 1px ${tone.tile}` }}>
-                  <Icon size={17} style={{ color: tone.fg }} aria-hidden="true" />
-                </span>
+                <GlyphTile icon={kind.icon} hue={kind.accent} size={36} className="mt-0.5" />
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium leading-snug" style={{ color: tone.fg }}>{t(kind.tr, kind.en)}</p>
                   {it.title && (
@@ -186,7 +184,7 @@ export default function DayInfoPanel({ lang, onClose }) {
       <div className="mt-2" data-testid="day-info-empty">
         <EmptyState
           compact
-          icon={Sparkles}
+          glyph="dayinfo"
           accent="amber"
           title={t("Sakin bir gün", "A quiet day")}
           body={t("Bugün için özel bir not bulamadım — her gün yeni bir başlangıç.", "I couldn't find anything special for today — every day is a fresh start.")}
@@ -203,7 +201,7 @@ export default function DayInfoPanel({ lang, onClose }) {
   return (
     <Panel onClose={onClose} size="md" accent="amber" labelledBy={titleId} testId="day-info-modal">
       <PanelHeader
-        icon={CalendarHeart}
+        glyph="dayinfo"
         accent="amber"
         title={t("Günün anlam ve önemi", "Today's significance")}
         subtitle={t("Özel günler ve tarihte bugün", "Observances and this day in history")}
@@ -216,7 +214,7 @@ export default function DayInfoPanel({ lang, onClose }) {
         <div ref={contentRef} tabIndex={-1} className="outline-none">{body}</div>
         {(items.length > 0 || paragraphs.length > 0) && (
           <p className="mt-6 flex items-start gap-2 border-t border-white/[0.06] pt-4 text-[11.5px] leading-relaxed text-white/35">
-            <Info size={13} className="mt-px shrink-0" aria-hidden="true" />
+            <GlowIcon icon={Info} hue="amber" size={13} className="mt-px opacity-80" />
             {t("Bu bilgiler yapay zekâ ile derlenir; önemli konularda doğrulamanı öneririm.", "This is compiled with AI; please double-check anything important.")}
           </p>
         )}

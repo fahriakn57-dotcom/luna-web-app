@@ -8,6 +8,7 @@ import {
   IconButton, Chip, Segmented, EmptyState, fieldClass, primaryButtonClass, secondaryButtonClass,
   ghostButtonClass,
 } from "@/components/panel/Panel";
+import { GlowIcon } from "@/components/icons/GlyphTile";
 import { friendlyDay, relativeTime } from "@/lib/dates";
 import {
   MAX_STEPS, STEP_MAX, TITLE_MAX, DESCRIPTION_MAX, EXAMPLES, newStepId, stripBullet, formatPercent, daysUntil,
@@ -35,6 +36,28 @@ export const CHIP_TONES = {
   late: "bg-rose-400/[0.14] text-rose-200",
   done: "bg-white/[0.04] text-white/40",
 };
+// Meta-chip glyphs glow in the chip's status hue (calm moonlight violet when
+// nothing is pressing); a finished item's chip stays quiet.
+const CHIP_GLOW = { neutral: "violet", soon: "amber", late: "rose" };
+
+function ChipGlyph({ icon: Icon, hue }) {
+  return hue ? <GlowIcon icon={Icon} hue={hue} size={12} /> : <Icon size={12} aria-hidden="true" />;
+}
+
+// Chip draws its own `icon` in plain currentColor; hand it the category glyph
+// already lit in the category's hue. Cached per glyph and hue, so a re-render
+// never swaps the component (which would remount the icon).
+const litGlyphs = new WeakMap();
+function litGlyph(icon, hue) {
+  let byHue = litGlyphs.get(icon);
+  if (!byHue) litGlyphs.set(icon, (byHue = new Map()));
+  if (!byHue.has(hue)) {
+    byHue.set(hue, function LitGlyph({ size }) {
+      return <GlowIcon icon={icon} hue={hue} size={size} />;
+    });
+  }
+  return byHue.get(hue);
+}
 
 // Custom range: the filled part of the track is painted from --track.
 export const rangeClass = [
@@ -87,11 +110,10 @@ export function CheckToggle({ checked, onToggle, label, testId, size = 22 }) {
 
 export function CategoryTag({ category, lang }) {
   const info = categoryInfo(category, lang);
-  const Icon = info.icon;
   return (
     <span className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[11.5px] font-medium"
       style={{ backgroundColor: info.tile, color: info.color }}>
-      <Icon size={12} aria-hidden="true" />
+      <GlowIcon icon={info.icon} hue={info.hue} size={12} />
       {info.label}
     </span>
   );
@@ -122,7 +144,7 @@ export function GoalDueChip({ t, lang, deadline, done }) {
   const withDate = !done && (days > 1 || days < 0);
   return (
     <span className={`${chipBase} ${CHIP_TONES[tone]}`} title={full}>
-      <Clock size={12} aria-hidden="true" />
+      <ChipGlyph icon={Clock} hue={CHIP_GLOW[tone]} />
       {withDate && (
         <>
           <span>{short}</span>
@@ -140,7 +162,7 @@ export function PlanDateChip({ lang, deadline, done }) {
   const tone = done ? "done" : info.days < 0 ? "late" : info.days === 0 ? "soon" : "neutral";
   return (
     <span className={`${chipBase} ${CHIP_TONES[tone]}`} title={info.full}>
-      <CalendarDays size={12} aria-hidden="true" />
+      <ChipGlyph icon={CalendarDays} hue={CHIP_GLOW[tone]} />
       {friendlyDay(info.date, lang)}
     </span>
   );
@@ -398,7 +420,7 @@ export function ItemFields({ t, lang, draft, onPatch, categories, testIds, focus
               const info = categoryInfo(key, lang);
               return (
                 <Chip key={key} active={draft.category === key} onClick={() => onPatch({ category: key })}
-                  icon={info.icon} color={info.color} testId={`${testIds.category}-${key}`}>
+                  icon={litGlyph(info.icon, info.hue)} testId={`${testIds.category}-${key}`}>
                   {info.label}
                 </Chip>
               );
@@ -609,14 +631,14 @@ export function PlanRow({ t, lang, plan, bucket, editor, onToggle, onToggleStep,
                 {showDate && <PlanDateChip lang={lang} deadline={plan.deadline} done={plan.done} />}
                 {total > 0 && (
                   <span className={`${chipBase} ${doneCount === total ? "bg-emerald-400/[0.12] text-emerald-200" : CHIP_TONES.neutral}`}>
-                    <ListChecks size={12} aria-hidden="true" />
+                    <ChipGlyph icon={ListChecks} hue={doneCount === total ? "emerald" : CHIP_GLOW.neutral} />
                     {doneCount}/{total}
                     <span className="sr-only"> {t("adım", "steps")}</span>
                   </span>
                 )}
                 {plan.description && !open && (
                   <span className="inline-flex min-w-0 max-w-full items-center gap-1 text-xs text-white/40">
-                    <AlignLeft size={12} aria-hidden="true" className="shrink-0 text-white/30" />
+                    <GlowIcon icon={AlignLeft} hue={CHIP_GLOW.neutral} size={12} glow={false} className="opacity-70" />
                     <span className="truncate">{plan.description.split("\n")[0]}</span>
                   </span>
                 )}
@@ -670,18 +692,18 @@ export function GoalStats({ t, lang, active, doneCount }) {
     <ul aria-label={t("Hedef özeti", "Goal summary")} data-testid="goal-stats"
       className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-white/50">
       <li className={item}>
-        <TrendingUp size={14} aria-hidden="true" className="text-emerald-300/80" />
+        <GlowIcon icon={TrendingUp} hue="emerald" size={14} />
         <span>{t("Ortalama ilerleme", "Average progress")} <span className={num}>{formatPercent(average, lang)}</span></span>
       </li>
       {overdue > 0 && (
         <li className={`${item} text-rose-200/80`}>
-          <AlertCircle size={14} aria-hidden="true" />
+          <GlowIcon icon={AlertCircle} hue="rose" size={14} />
           <span><span className="font-semibold tabular-nums">{overdue}</span> {t("gecikmiş", "overdue")}</span>
         </li>
       )}
       {doneCount > 0 && (
         <li className={item}>
-          <CircleCheck size={14} aria-hidden="true" className="text-white/30" />
+          <GlowIcon icon={CircleCheck} hue="emerald" size={14} glow={false} className="opacity-60" />
           <span><span className={num}>{doneCount}</span> {t("tamamlandı", "completed")}</span>
         </li>
       )}
@@ -705,7 +727,7 @@ export function TabEmpty({ t, kind, hasDone, showCta, onCreate }) {
       : t("Tarihi olan işlerini adım adım planla; burada güne göre sıralanır.", "Plan dated things step by step; they're sorted by day here.");
   }
   return (
-    <EmptyState icon={isGoal ? Target : CalendarCheck} accent="emerald" compact={hasDone || !showCta} title={title} body={body}
+    <EmptyState glyph="goals" accent="emerald" compact={hasDone || !showCta} title={title} body={body}
       action={showCta ? (
         <div className="flex flex-col items-center gap-4">
           <button type="button" onClick={() => onCreate("")} className={primaryButtonClass} data-testid={`${kind}-empty-cta`}>

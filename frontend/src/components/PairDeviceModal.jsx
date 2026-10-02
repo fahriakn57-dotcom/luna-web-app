@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { pairWithCode } from "@/lib/api";
+import { GlyphTile } from "@/components/icons/GlyphTile";
 
 export default function PairDeviceModal({ lang, onPaired, onClose }) {
   const [code, setCode] = useState("");
@@ -27,11 +28,15 @@ export default function PairDeviceModal({ lang, onPaired, onClose }) {
       <div onClick={(e) => e.stopPropagation()}
         className="w-full max-w-sm rounded-2xl border p-6 bg-[#130f21] border-amber-400/25">
         <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Smartphone size={16} className="text-amber-300" />
+          <div className="flex items-center gap-3">
+            {/* Amber like the rest of this modal (border, code field, button). */}
+            <GlyphTile icon={Smartphone} hue="amber" size={40} />
             <h2 className="text-sm font-bold text-white">{t("Telefonla Eşleştir", "Pair with your phone")}</h2>
           </div>
-          <button onClick={onClose} className="text-white/40 hover:text-white"><X size={16} /></button>
+          <button onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5">
+            <X size={16} />
+          </button>
         </div>
 
         <p className="text-xs text-white/60 leading-relaxed mb-4">

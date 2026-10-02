@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Mic, MicOff, Menu, Paperclip, X, Wand2, Image, FileText, Table, FileType2, Presentation, Grid3x3, BarChart3, Phone } from "lucide-react";
+import { Send, Mic, MicOff, Menu, Paperclip, X, Wand2, Phone } from "lucide-react";
 import { toast } from "sonner";
 import ChatMessage from "@/components/ChatMessage";
+import { IconTile, LunaIcon, hueRgb } from "@/components/icons/LunaIcon";
+import { GlyphTile, GlowIcon } from "@/components/icons/GlyphTile";
 
 const ACCEPTED_EXT = ["png", "jpg", "jpeg", "webp", "gif", "pdf", "txt", "csv", "docx", "xlsx", "pptx", "zip"];
 const ACCEPTED_ATTR = ".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.csv,.docx,.xlsx,.pptx,.zip";
@@ -23,40 +25,41 @@ const WORK_QUICK_CHIPS = [
 // menüsü. Hepsi (görsel dahil) aynı inline akışı kullanıyor: bir mod
 // seçilir, kullanıcı yazar, gönderince Luna.jsx'teki ilgili generate*
 // fonksiyonu çağrılır ve sonuç doğrudan sohbete düşer — ayrı bir modal
-// pencere açılmıyor.
+// pencere açılmıyor. `glyph` Luna'nın kendi (Celestial) ikonu — kenar
+// çubuğundaki "Ürettiklerim" satırlarıyla aynı ikon ve renk.
 const GEN_KIND_CONFIG = {
   image: {
-    icon: Image, tr: "Görsel", en: "Image",
+    glyph: "images", tr: "Görsel", en: "Image",
     chip: { tr: "Görsel oluşturma modu — ne çizeyim?", en: "Image mode — what should I draw?" },
     placeholder: { tr: "Örn: mor tonlarda hilal ay şeklinde bir logo...", en: "E.g.: a crescent moon logo in purple tones..." },
   },
   pdf: {
-    icon: FileText, tr: "PDF", en: "PDF",
+    glyph: "pdf", tr: "PDF", en: "PDF",
     chip: { tr: "PDF modu — verini yaz ya da yapıştır", en: "PDF mode — write or paste your data" },
     placeholder: { tr: "Örn: geçen ayın gider listesi...", en: "E.g.: last month's expense list..." },
   },
   word: {
-    icon: FileType2, tr: "Word", en: "Word",
+    glyph: "word", tr: "Word", en: "Word",
     chip: { tr: "Word modu — içeriğini yaz ya da yapıştır", en: "Word mode — write or paste your content" },
     placeholder: { tr: "Örn: proje raporu taslağı...", en: "E.g.: a project report draft..." },
   },
   ppt: {
-    icon: Presentation, tr: "PowerPoint", en: "PowerPoint",
+    glyph: "ppt", tr: "PowerPoint", en: "PowerPoint",
     chip: { tr: "Sunum modu — konu başlıklarını yaz", en: "Slides mode — write your talking points" },
     placeholder: { tr: "Örn: yeni ürün lansmanı sunumu...", en: "E.g.: a new product launch deck..." },
   },
   excel: {
-    icon: Table, tr: "Excel", en: "Excel",
+    glyph: "excel", tr: "Excel", en: "Excel",
     chip: { tr: "Excel modu — verini yaz ya da yapıştır", en: "Excel mode — write or paste your data" },
     placeholder: { tr: "Örn: haftalık satış rakamları...", en: "E.g.: weekly sales figures..." },
   },
   table: {
-    icon: Grid3x3, tr: "Tablo", en: "Table",
+    glyph: "table", tr: "Tablo", en: "Table",
     chip: { tr: "Tablo modu — verini yaz ya da yapıştır", en: "Table mode — write or paste your data" },
     placeholder: { tr: "Örn: öğrenci not listesi...", en: "E.g.: a student grade list..." },
   },
   chart: {
-    icon: BarChart3, tr: "Grafik", en: "Chart",
+    glyph: "chart", tr: "Grafik", en: "Chart",
     chip: { tr: "Grafik modu — sayısal verini yaz", en: "Chart mode — write your numeric data" },
     placeholder: { tr: "Örn: aylık gelir: Ocak 10bin, Şubat 12bin...", en: "E.g.: monthly revenue: Jan 10k, Feb 12k..." },
   },
@@ -246,7 +249,7 @@ export default function FriendPanel({
               style={{ backgroundColor: "rgba(10,8,20,0.55)" }}>
               <div className="flex flex-col items-center gap-2 px-6 py-5 rounded-2xl border-2 border-dashed border-purple-400/60"
                 style={{ backgroundColor: "rgba(20,11,40,0.9)" }}>
-                <Paperclip size={22} className="text-purple-300" />
+                <GlyphTile icon={Paperclip} hue="violet" size={48} />
                 <p className="text-sm font-semibold text-white">{t("Bırak, Luna baksın 👀", "Drop it — Luna will take a look 👀")}</p>
               </div>
             </div>
@@ -254,7 +257,8 @@ export default function FriendPanel({
 
           <div ref={listRef} data-testid="chat-message-list" className="relative flex-1 overflow-y-auto px-5 py-5 space-y-3 min-h-[220px]">
             {!hasMessages && (
-              <div className="h-full flex flex-col items-center justify-center text-center gap-4">
+              <div className="min-h-full flex flex-col items-center justify-center text-center gap-4">
+                <IconTile name={workMode ? "work" : "friend"} size={56} />
                 <p className="text-white/80 max-w-sm">
                   {workMode
                     ? t("Bir görsel/PDF yükle, bana bir görsel çizdir ya da ne yapmam gerektiğini yaz 📎🎨", "Upload an image/PDF, ask me to draw one, or just tell me what you need 📎🎨")
@@ -298,7 +302,7 @@ export default function FriendPanel({
                 {pendingFiles.map((f, i) => (
                   <div key={`${f.name}-${i}`} data-testid="pending-attachment-chip"
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-400/10 border border-purple-400/25 text-xs text-purple-100 max-w-[180px]">
-                    <Paperclip size={12} className="shrink-0" />
+                    <GlowIcon icon={Paperclip} hue="violet" size={13} />
                     <span className="truncate">{f.name}</span>
                     <button onClick={() => removePendingFile(i)} data-testid="remove-attachment-button"
                       aria-label={t("Dosyayı kaldır", "Remove file")}
@@ -318,7 +322,8 @@ export default function FriendPanel({
             {genKind && (
               <div data-testid="generate-mode-chip"
                 className="flex items-center gap-2 mb-2 mx-1 px-3 py-1.5 rounded-full bg-fuchsia-400/10 border border-fuchsia-400/25 text-xs text-fuchsia-100 w-fit max-w-full">
-                <Wand2 size={12} className="shrink-0" />
+                <LunaIcon name={GEN_KIND_CONFIG[genKind].glyph} size={16}
+                  style={{ filter: `drop-shadow(0 0 4px rgba(${hueRgb(GEN_KIND_CONFIG[genKind].glyph)},.55))` }} />
                 <span>{t(GEN_KIND_CONFIG[genKind].chip.tr, GEN_KIND_CONFIG[genKind].chip.en)}</span>
                 <button onClick={() => setGenKind(null)} data-testid="cancel-generate-mode-button"
                   aria-label={t("İptal et", "Cancel")}
@@ -354,7 +359,7 @@ export default function FriendPanel({
                           <button key={key} data-testid={`generate-menu-item-${key}`}
                             onClick={() => handleGenMenuPick(key)}
                             className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-purple-100 hover:bg-purple-400/15 hover:text-white transition-colors text-left">
-                            <it.icon size={15} className="shrink-0 text-purple-300" />
+                            <LunaIcon name={it.glyph} size={18} />
                             {t(it.tr, it.en)}
                           </button>
                         );

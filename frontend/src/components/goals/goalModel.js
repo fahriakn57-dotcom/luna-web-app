@@ -158,15 +158,18 @@ export function quickDates(kind, t) {
   ];
 }
 
+// `hue` lights the category glyph (a Celestial hue family, same as the
+// accent); `color`/`tile` tint the tag, the label and the progress bar.
 export function categoryInfo(key, lang) {
   const meta = CATEGORY_META[key];
-  const tone = ACCENTS[meta?.accent || "indigo"];
+  const hue = meta?.accent || "indigo";
+  const tone = ACCENTS[hue];
   // An unknown category (e.g. one added on the server later) still reads
   // like a label rather than a lower-case key.
   const label = meta
     ? (lang === "tr" ? meta.tr : meta.en)
     : key ? key.charAt(0).toLocaleUpperCase("tr-TR") + key.slice(1) : (lang === "tr" ? "Diğer" : "Other");
-  return { icon: meta?.icon || Shapes, color: tone.fg, tile: tone.tile, label };
+  return { icon: meta?.icon || Shapes, hue, color: tone.fg, tile: tone.tile, label };
 }
 
 export const emptyDraft = (kind, title, category) => ({

@@ -526,7 +526,7 @@ export default function GoalsPanel({ lang, onClose }) {
   return (
     <Panel onClose={requestClose} size="xl" accent="emerald" labelledBy={titleId} testId="goals-panel">
       <PanelHeader
-        icon={Target}
+        glyph="goals"
         accent="emerald"
         title={panelTitle}
         subtitle={subtitle}

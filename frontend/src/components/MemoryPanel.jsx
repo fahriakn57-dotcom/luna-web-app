@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  Heart, Plus, Search, SearchX, X, Pencil, Trash2, Check, Loader2,
-  User, Briefcase, Target, Sparkles, CalendarDays, SlidersHorizontal, HeartHandshake, Users, FolderKanban, Flag, Repeat, Shapes,
+  Plus, Search, X, Pencil, Trash2, Check, Loader2, User, Briefcase, Target, Sparkles, CalendarDays,
+  SlidersHorizontal, HeartHandshake, Users, FolderKanban, Flag, Repeat, Shapes,
 } from "lucide-react";
 import { toast } from "sonner";
 import { fetchMemories, addMemory, editMemory, deleteMemory } from "@/lib/api";
@@ -10,28 +10,43 @@ import {
   Panel, PanelHeader, PanelBody, IconButton, Chip, ChipRail, EmptyState, SkeletonList, ErrorState,
   usePanelTitleId, fieldClass, primaryButtonClass, secondaryButtonClass,
 } from "@/components/panel/Panel";
+import { GlowIcon } from "@/components/icons/GlyphTile";
 import { relativeTime, formatDate, formatTime } from "@/lib/dates";
+
+// Glyph hues outside the Celestial families, at the same (400) depth.
+const PINK = "244,114,182";
+const LIME = "163,230,53";
+const SLATE = "148,163,184";
 
 // One canonical group per category. The extractor writes singular keys
 // ("proje", "önemli_tarih"), manual entries use the plural list the backend
 // returns ("projeler", "önemli_tarihler") and rows without a category fall
 // back to the engine's type ("person", "long_term"). Labels, filters and
 // counts therefore always go through groupOf(), never the raw key.
+// `rgb` tints the pill and its label; `hue` lights the glyph.
 const GROUPS = {
-  "kişisel": { tr: "Kişisel", en: "Personal", icon: User, rgb: "196,181,253" },
-  "iş": { tr: "İş", en: "Work", icon: Briefcase, rgb: "125,211,252" },
-  "hedefler": { tr: "Hedefler", en: "Goals", icon: Target, rgb: "110,231,183" },
-  "ilgi_alanları": { tr: "İlgi alanları", en: "Interests", icon: Sparkles, rgb: "252,211,77" },
-  "önemli_tarihler": { tr: "Önemli tarihler", en: "Important dates", icon: CalendarDays, rgb: "253,164,175" },
-  "tercihler": { tr: "Tercihler", en: "Preferences", icon: SlidersHorizontal, rgb: "165,180,252" },
-  "ilişkiler": { tr: "İlişkiler", en: "Relationships", icon: HeartHandshake, rgb: "249,168,212" },
-  "kişiler": { tr: "Kişiler", en: "People", icon: Users, rgb: "94,234,212" },
-  "projeler": { tr: "Projeler", en: "Projects", icon: FolderKanban, rgb: "253,186,116" },
-  "olaylar": { tr: "Olaylar", en: "Events", icon: Flag, rgb: "240,171,252" },
-  "alışkanlıklar": { tr: "Alışkanlıklar", en: "Habits", icon: Repeat, rgb: "190,242,100" },
-  "diğer": { tr: "Diğer", en: "Other", icon: Shapes, rgb: "203,213,225" },
+  "kişisel": { tr: "Kişisel", en: "Personal", icon: User, rgb: "196,181,253", hue: "violet" },
+  "iş": { tr: "İş", en: "Work", icon: Briefcase, rgb: "125,211,252", hue: "sky" },
+  "hedefler": { tr: "Hedefler", en: "Goals", icon: Target, rgb: "110,231,183", hue: "emerald" },
+  "ilgi_alanları": { tr: "İlgi alanları", en: "Interests", icon: Sparkles, rgb: "252,211,77", hue: "amber" },
+  "önemli_tarihler": { tr: "Önemli tarihler", en: "Important dates", icon: CalendarDays, rgb: "253,164,175", hue: "rose" },
+  "tercihler": { tr: "Tercihler", en: "Preferences", icon: SlidersHorizontal, rgb: "165,180,252", hue: "indigo" },
+  "ilişkiler": { tr: "İlişkiler", en: "Relationships", icon: HeartHandshake, rgb: "249,168,212", hue: PINK },
+  "kişiler": { tr: "Kişiler", en: "People", icon: Users, rgb: "94,234,212", hue: "teal" },
+  "projeler": { tr: "Projeler", en: "Projects", icon: FolderKanban, rgb: "253,186,116", hue: "orange" },
+  "olaylar": { tr: "Olaylar", en: "Events", icon: Flag, rgb: "240,171,252", hue: "fuchsia" },
+  "alışkanlıklar": { tr: "Alışkanlıklar", en: "Habits", icon: Repeat, rgb: "190,242,100", hue: LIME },
+  "diğer": { tr: "Diğer", en: "Other", icon: Shapes, rgb: "203,213,225", hue: SLATE },
 };
 const GROUP_ORDER = Object.keys(GROUPS);
+
+// Chip draws its own `icon` in plain currentColor; hand it each group's glyph
+// already lit in the group's hue. Built once, so a re-render never swaps the
+// component (which would remount the icon).
+const litGlyph = (icon, hue) => function LitGlyph({ size }) {
+  return <GlowIcon icon={icon} hue={hue} size={size} />;
+};
+const CHIP_GLYPHS = Object.fromEntries(Object.entries(GROUPS).map(([key, g]) => [key, litGlyph(g.icon, g.hue)]));
 
 // Used until the backend's own list arrives (and if it ever comes back empty).
 const DEFAULT_CATEGORIES = ["kişisel", "iş", "hedefler", "ilgi_alanları", "önemli_tarihler", "tercihler", "ilişkiler", "projeler", "diğer"];
@@ -120,11 +135,10 @@ const textareaClass = `${fieldClass} resize-none min-h-[88px] max-h-64 leading-r
 
 function CategoryPill({ group, lang }) {
   const g = GROUPS[group] || GROUPS["diğer"];
-  const Icon = g.icon;
   return (
     <span className="inline-flex items-center gap-1 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-5"
       style={{ color: `rgb(${g.rgb})`, backgroundColor: `rgba(${g.rgb},0.1)`, boxShadow: `inset 0 0 0 1px rgba(${g.rgb},0.16)` }}>
-      <Icon size={12} aria-hidden="true" />
+      <GlowIcon icon={g.icon} hue={g.hue} size={12} />
       {groupLabel(group, lang)}
     </span>
   );
@@ -134,15 +148,12 @@ function CategoryPicker({ options, value, onChange, lang, label, testId }) {
   const current = groupOf(value);
   return (
     <div role="group" aria-label={label} data-testid={testId} className="flex flex-wrap gap-1.5">
-      {options.map((o) => {
-        const g = GROUPS[o.group];
-        return (
-          <Chip key={o.group} active={o.group === current} onClick={() => onChange(o.key)}
-            icon={g.icon} color={`rgb(${g.rgb})`} testId={`${testId}-${o.group}`}>
-            {groupLabel(o.group, lang)}
-          </Chip>
-        );
-      })}
+      {options.map((o) => (
+        <Chip key={o.group} active={o.group === current} onClick={() => onChange(o.key)}
+          icon={CHIP_GLYPHS[o.group]} testId={`${testId}-${o.group}`}>
+          {groupLabel(o.group, lang)}
+        </Chip>
+      ))}
     </div>
   );
 }
@@ -560,7 +571,7 @@ export default function MemoryPanel({ lang, onClose }) {
     );
   } else if (count === 0) {
     view = adding ? null : (
-      <EmptyState icon={Heart} accent="rose" title={t("Henüz bir anı yok", "No memories yet")}
+      <EmptyState glyph="memories" accent="rose" title={t("Henüz bir anı yok", "No memories yet")}
         body={t("Sohbet ettikçe Luna önemli şeyleri hatırlar. İstersen kendin de ekleyebilirsin.",
           "As you chat, Luna remembers what matters. You can also add things yourself.")}
         action={(
@@ -590,15 +601,12 @@ export default function MemoryPanel({ lang, onClose }) {
             <Chip active={cat === "all"} onClick={() => setActiveCat("all")} count={count} testId="memory-cat-all">
               {t("Tümü", "All")}
             </Chip>
-            {groups.map((g) => {
-              const meta = GROUPS[g.key];
-              return (
-                <Chip key={g.key} active={cat === g.key} onClick={() => setActiveCat(cat === g.key ? "all" : g.key)}
-                  icon={meta.icon} color={`rgb(${meta.rgb})`} count={g.count} testId={`memory-cat-${g.key}`}>
-                  {groupLabel(g.key, lang)}
-                </Chip>
-              );
-            })}
+            {groups.map((g) => (
+              <Chip key={g.key} active={cat === g.key} onClick={() => setActiveCat(cat === g.key ? "all" : g.key)}
+                icon={CHIP_GLYPHS[g.key]} count={g.count} testId={`memory-cat-${g.key}`}>
+                {groupLabel(g.key, lang)}
+              </Chip>
+            ))}
           </ChipRail>
         </div>
 
@@ -607,7 +615,7 @@ export default function MemoryPanel({ lang, onClose }) {
         </p>
 
         {visible.length === 0 ? (
-          <EmptyState compact icon={SearchX} accent="rose" title={t("Eşleşen anı yok", "No matching memories")}
+          <EmptyState compact glyph="memories" accent="rose" title={t("Eşleşen anı yok", "No matching memories")}
             body={t("Başka bir kelime dene ya da filtreyi temizle.", "Try another word or clear the filter.")}
             action={(
               <button type="button" onClick={clearFilters} data-testid="memory-clear-filters" className={secondaryButtonClass}>
@@ -633,7 +641,7 @@ export default function MemoryPanel({ lang, onClose }) {
 
   return (
     <Panel onClose={onClose} size="xl" accent="rose" labelledBy={titleId} testId="memories-modal">
-      <PanelHeader icon={Heart} accent="rose" title={t("Anılarım", "My memories")} subtitle={subtitle}
+      <PanelHeader glyph="memories" accent="rose" title={t("Anılarım", "My memories")} subtitle={subtitle}
         titleId={titleId} onClose={onClose} closeLabel={t("Kapat", "Close")}
         actions={(
           // The label already flips between "add" and "close", so no

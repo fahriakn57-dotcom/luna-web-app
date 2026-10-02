@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ShieldCheck, Loader2, LogOut } from "lucide-react";
 import { toast } from "sonner";
+import { GlyphTile } from "@/components/icons/GlyphTile";
 import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { accountDeletionBody, consentWithdrawalBody } from "@/lib/legalCopy";
@@ -110,12 +111,18 @@ export default function TermsGate({ lang, currentVersion, initialConsent = false
         {/* Scrollable body — the action buttons below stay visible even on a
             360px-wide phone where all of this doesn't fit at once. */}
         <div className="flex-1 min-h-0 overflow-y-auto px-5 pt-5 pb-4 sm:px-6 sm:pt-6">
-          <h2 id={titleId} className="flex items-center gap-2 text-base font-bold text-white mb-1">
-            <ShieldCheck size={17} className="text-purple-300" /> {t("Devam etmeden önce", "Before you continue")}
-          </h2>
-          <p className="text-xs text-white/50 mb-4">
-            {t("Luna'yı kullanmaya devam etmeden önce bu kısa özeti oku.", "Please read this short summary before you keep using Luna.")}
-          </p>
+          {/* Tile + title/subtitle column, like the panel headers. */}
+          <div className="flex items-start gap-3 mb-4">
+            <GlyphTile icon={ShieldCheck} hue="violet" size={40} />
+            <div className="min-w-0 flex-1 pt-0.5">
+              <h2 id={titleId} className="text-base font-bold text-white leading-tight">
+                {t("Devam etmeden önce", "Before you continue")}
+              </h2>
+              <p className="mt-1 text-xs text-white/50">
+                {t("Luna'yı kullanmaya devam etmeden önce bu kısa özeti oku.", "Please read this short summary before you keep using Luna.")}
+              </p>
+            </div>
+          </div>
 
           <ul className="rounded-2xl p-4 mb-4 space-y-2 border border-purple-400/25"
             style={{ backgroundColor: "rgba(192,132,252,0.08)" }} data-testid="terms-gate-summary">

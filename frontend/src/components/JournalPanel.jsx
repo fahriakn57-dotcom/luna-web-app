@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, CalendarDays, Flame, Loader2, PenLine, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { CalendarDays, Flame, Loader2, PenLine, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { fetchJournal, createJournalEntry, editJournalEntry, deleteJournalEntry } from "@/lib/api";
+import { GlowIcon, GlyphTile } from "@/components/icons/GlyphTile";
 import {
   Panel, PanelHeader, PanelBody, IconButton, Segmented, SectionLabel, EmptyState, ErrorState,
-  ACCENTS, usePanelTitleId, fieldClass, primaryButtonClass, secondaryButtonClass,
+  usePanelTitleId, fieldClass, primaryButtonClass, secondaryButtonClass,
 } from "@/components/panel/Panel";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { addDays, dayKey, formatDate, formatTime, startOfDay, toDate } from "@/lib/dates";
@@ -201,13 +202,10 @@ function Composer({ t, todayLabel, draft, onDraftChange, saving, onSave, onCance
 }
 
 function ComposePrompt({ t, todayLabel, wroteToday, onOpen }) {
-  const tone = ACCENTS.violet;
   return (
     <button type="button" onClick={onOpen} data-testid="journal-compose-prompt"
       className="group flex w-full items-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 text-left transition-colors hover:border-violet-300/25 hover:bg-white/[0.045] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/60">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: tone.tile }}>
-        <PenLine size={16} aria-hidden="true" style={{ color: tone.fg }} />
-      </span>
+      <GlyphTile icon={PenLine} hue="violet" size={36} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-white/85">
           {wroteToday ? t("Bugün için bir sayfa daha yaz", "Write another page for today") : t("Bugün neler yaşadın?", "How was your day?")}
@@ -226,17 +224,20 @@ function StatsStrip({ t, tr, stats }) {
     <ul aria-label={t("Günlük istatistikleri", "Journal stats")} data-testid="journal-stats"
       className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-white/50">
       <li className={item}>
-        <PenLine size={14} aria-hidden="true" className="text-white/30" />
+        <GlowIcon icon={PenLine} hue="violet" size={14} />
         <span><span className={num}>{stats.total}</span> {t("kayıt", stats.total === 1 ? "entry" : "entries")}</span>
       </li>
       <li className={item}>
-        <CalendarDays size={14} aria-hidden="true" className="text-white/30" />
+        <GlowIcon icon={CalendarDays} hue="sky" size={14} />
         {tr
           ? <span>Bu ay <span className={num}>{stats.thisMonth}</span></span>
           : <span><span className={num}>{stats.thisMonth}</span> this month</span>}
       </li>
       <li className={item} title={t("Art arda yazdığın gün sayısı", "Days in a row you've written")}>
-        <Flame size={14} aria-hidden="true" className={stats.streak ? "text-amber-300" : "text-white/30"} />
+        {/* The flame only lights up while a streak is alive. */}
+        {stats.streak
+          ? <GlowIcon icon={Flame} hue="amber" size={14} />
+          : <Flame size={14} aria-hidden="true" className="text-white/30" />}
         {stats.streak
           ? <span><span className={num}>{stats.streak}</span>{t(" günlük seri", "-day streak")}</span>
           : <span>{t("Seri yok", "No streak yet")}</span>}
@@ -405,7 +406,7 @@ function SummaryCard({ t, lang, summary }) {
       <DateColumn date={date} lang={lang} highlight={isToday} />
       <div className="min-w-0 flex-1 border-l border-white/[0.06] pl-3.5">
         <p className="flex min-h-[20px] items-center gap-1.5 text-xs font-medium text-violet-200/80">
-          <Sparkles size={12} aria-hidden="true" />
+          <GlowIcon icon={Sparkles} hue="violet" size={13} />
           {t("Luna'nın özeti", "Luna's recap")}
           <span className="sr-only">, {fullDateLabel(date, lang)}</span>
         </p>
@@ -716,7 +717,7 @@ export default function JournalPanel({ lang, onClose }) {
     );
   } else if (tab === "entries") {
     list = entries.length === 0 ? (
-      <EmptyState icon={PenLine} accent="violet" compact={composerOpen}
+      <EmptyState glyph="journal" accent="violet" compact={composerOpen}
         title={t("İlk sayfanı yaz", "Write your first page")}
         body={t("Günün nasıl geçti, aklında ne var? Birkaç cümle yeter.", "How was your day? What's on your mind? A few sentences are enough.")}
         action={composerOpen ? null : (
@@ -747,7 +748,7 @@ export default function JournalPanel({ lang, onClose }) {
     );
   } else {
     list = summaries.length === 0 ? (
-      <EmptyState icon={Sparkles} accent="violet"
+      <EmptyState glyph="chats" accent="violet"
         title={t("Henüz özet yok", "No recaps yet")}
         body={t("Sohbet ettiğin günlerin sonunda Luna kısa bir özet çıkarır; burada birikir.",
           "At the end of each day you chat, Luna writes a short recap. They collect here.")}
@@ -769,7 +770,7 @@ export default function JournalPanel({ lang, onClose }) {
   return (
     <Panel onClose={requestClose} size="lg" accent="violet" labelledBy={titleId} testId="journal-panel">
       <PanelHeader
-        icon={BookOpen}
+        glyph="journal"
         accent="violet"
         title={t("Günlük", "Journal")}
         subtitle={t("Yazdıkların Luna'nın hafızasına da işlenir.", "What you write also becomes part of Luna's memory.")}

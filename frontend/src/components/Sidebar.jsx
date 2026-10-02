@@ -1,27 +1,23 @@
-import {
-  Smile, BookOpen, Heart, Target, StickyNote, Bell, Settings,
-  Crown, ChevronRight, LogOut, Sparkles, X,
-  Wand2, Image, FileText, Table, FileType2, Presentation, Grid3x3, BarChart3,
-  Gauge, CalendarHeart, Activity, MessageSquare,
-} from "lucide-react";
+import { ChevronRight, X } from "lucide-react";
+import { LunaIcon, hueRgb } from "@/components/icons/LunaIcon";
 import lunaLogo from "@/assets/luna-logo.png";
 
 const MODE_ITEMS = [
-  { key: "friend", icon: Smile, label: "Arkadaş Modu" },
-  { key: "work", icon: Wand2, label: "LunaWorks Modu" },
+  { key: "friend", glyph: "friend", label: "Arkadaş Modu" },
+  { key: "work", glyph: "work", label: "LunaWorks Modu" },
 ];
 
 const FRIEND_ITEMS = [
-  { key: "journal", icon: BookOpen, label: "Günlük" },
-  { key: "memories", icon: Heart, label: "Anılarım" },
-  { key: "mood", icon: Activity, label: "Ruh Halim" },
-  { key: "day-info", icon: CalendarHeart, label: "Günün Anlamı" },
-  { key: "hobbies", icon: Sparkles, label: "Hobilerim" },
-  { key: "goals", icon: Target, label: "Hedeflerim & Planlarım" },
-  { key: "notes", icon: StickyNote, label: "Notlarım" },
-  { key: "alarms", icon: Bell, label: "Alarmlar" },
-  { key: "usage", icon: Gauge, label: "Kullanımım" },
-  { key: "settings", icon: Settings, label: "Ayarlar" },
+  { key: "journal", glyph: "journal", label: "Günlük" },
+  { key: "memories", glyph: "memories", label: "Anılarım" },
+  { key: "mood", glyph: "mood", label: "Ruh Halim" },
+  { key: "day-info", glyph: "dayinfo", label: "Günün Anlamı" },
+  { key: "hobbies", glyph: "hobbies", label: "Hobilerim" },
+  { key: "goals", glyph: "goals", label: "Hedeflerim & Planlarım" },
+  { key: "notes", glyph: "notes", label: "Notlarım" },
+  { key: "alarms", glyph: "alarms", label: "Alarmlar" },
+  { key: "usage", glyph: "usage", label: "Kullanımım" },
+  { key: "settings", glyph: "settings", label: "Ayarlar" },
 ];
 
 // Görsel üretiminin kendisi LunaWorks'ün sohbet giriş çubuğundaki Wand2
@@ -32,20 +28,30 @@ const FRIEND_ITEMS = [
 // "work-excel" ise indirilebilir bir .xlsx dosyası; ikisi de aynı
 // structure_table() çıktısını farklı şekilde render eder.
 const WORK_ITEMS = [
-  { key: "work-images", icon: Image, label: "Ürettiklerim: Görsel" },
-  { key: "work-pdf", icon: FileText, label: "Ürettiklerim: PDF" },
-  { key: "work-excel", icon: Table, label: "Ürettiklerim: Excel" },
-  { key: "work-word", icon: FileType2, label: "Ürettiklerim: Word" },
-  { key: "work-ppt", icon: Presentation, label: "Ürettiklerim: PowerPoint" },
-  { key: "work-table", icon: Grid3x3, label: "Ürettiklerim: Tablo" },
-  { key: "work-chart", icon: BarChart3, label: "Ürettiklerim: Grafik" },
-  { key: "settings", icon: Settings, label: "Ayarlar" },
+  { key: "work-images", glyph: "images", label: "Ürettiklerim: Görsel" },
+  { key: "work-pdf", glyph: "pdf", label: "Ürettiklerim: PDF" },
+  { key: "work-excel", glyph: "excel", label: "Ürettiklerim: Excel" },
+  { key: "work-word", glyph: "word", label: "Ürettiklerim: Word" },
+  { key: "work-ppt", glyph: "ppt", label: "Ürettiklerim: PowerPoint" },
+  { key: "work-table", glyph: "table", label: "Ürettiklerim: Tablo" },
+  { key: "work-chart", glyph: "chart", label: "Ürettiklerim: Grafik" },
+  { key: "settings", glyph: "settings", label: "Ayarlar" },
 ];
 
 // The router's basename is "/app", so react-router's navigate("/") only
 // lands back on /app/ — leaving for the marketing site needs a real
 // full-page navigation to the domain root.
 const goToMarketingHome = () => { window.location.href = "/"; };
+
+// Luna's own icons, bare at 20px: slightly dimmed at rest, full on hover, and
+// glowing softly in their own hue when the row is the active one.
+function SidebarGlyph({ name, active = false }) {
+  return (
+    <LunaIcon name={name} size={20}
+      className={`transition-opacity ${active ? "opacity-100" : "opacity-85 group-hover:opacity-100"}`}
+      style={active ? { filter: `drop-shadow(0 0 4px rgba(${hueRgb(name)},.55))` } : undefined} />
+  );
+}
 
 export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories, onOpenSettings, onOpenPanel, onOpenPremium, onOpenConversations, mobileOpen, onCloseMobile }) {
   const items = mode === "work" ? WORK_ITEMS : FRIEND_ITEMS;
@@ -86,12 +92,12 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
           return (
             <button key={it.key} data-testid={`sidebar-item-${it.key}`}
               onClick={() => handleClick(it.key)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+              className={`group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                 isActive
                   ? "bg-gradient-to-r from-indigo-500/25 to-fuchsia-500/25 text-white border border-purple-400/30"
                   : "text-white/55 hover:text-white hover:bg-white/5"
               }`}>
-              <it.icon size={17} />
+              <SidebarGlyph name={it.glyph} active={isActive} />
               {it.label}
             </button>
           );
@@ -99,8 +105,8 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
 
         <button data-testid="sidebar-item-conversations"
           onClick={() => { onCloseMobile?.(); onOpenConversations(); }}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors text-white/55 hover:text-white hover:bg-white/5">
-          <MessageSquare size={17} />
+          className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors text-white/55 hover:text-white hover:bg-white/5">
+          <SidebarGlyph name="chats" />
           {t("Sohbetlerim", "My Chats")}
         </button>
 
@@ -111,12 +117,12 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
           return (
             <button key={it.key} data-testid={`sidebar-item-${it.key}`}
               onClick={() => handleClick(it.key)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+              className={`group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                 isActive
                   ? "bg-gradient-to-r from-indigo-500/25 to-fuchsia-500/25 text-white border border-purple-400/30"
                   : "text-white/55 hover:text-white hover:bg-white/5"
               }`}>
-              <it.icon size={17} />
+              <SidebarGlyph name={it.glyph} active={isActive} />
               {it.label}
             </button>
           );
@@ -127,7 +133,7 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
         onKeyDown={(e) => e.key === "Enter" && onOpenPremium()}
         className="cursor-pointer rounded-2xl border border-purple-400/25 bg-gradient-to-br from-indigo-500/10 to-fuchsia-500/10 p-4 mb-3 hover:border-purple-400/45 transition-colors">
         <div className="flex items-center gap-2 text-sm font-semibold text-white mb-1">
-          <Crown size={15} className="text-amber-300" /> Luna Premium
+          <LunaIcon name="premium" size={18} style={{ filter: `drop-shadow(0 0 4px rgba(${hueRgb("premium")},.55))` }} /> Luna Premium
         </div>
         <p className="text-[11px] text-white/50 mb-2">{t("Günlük mesaj sınırı yok, daha yüksek kullanım kotası.", "No daily message limit, a higher usage quota.")}</p>
         <span data-testid="sidebar-premium-button"
@@ -137,8 +143,8 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
       </div>
 
       <button onClick={goToMarketingHome} data-testid="sidebar-logout"
-        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-white/45 hover:text-white hover:bg-white/5 transition-colors">
-        <LogOut size={15} /> {t("Ana sayfaya dön", "Back to home")}
+        className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-white/45 hover:text-white hover:bg-white/5 transition-colors">
+        <SidebarGlyph name="home" /> {t("Ana sayfaya dön", "Back to home")}
       </button>
       </aside>
     </>

@@ -1,10 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { ArrowDown, Check, CornerDownLeft, LayoutGrid, Plus, Sparkles, X } from "lucide-react";
+import { ArrowDown, Check, CornerDownLeft, LayoutGrid, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { fetchProfile, updateProfile } from "@/lib/api";
 import { Panel, PanelHeader, PanelBody, IconButton, Chip, ChipRail, SectionLabel, ErrorState, usePanelTitleId } from "@/components/panel/Panel";
+import { GlyphTile, GlowIcon } from "@/components/icons/GlyphTile";
+import { LunaIcon } from "@/components/icons/LunaIcon";
 import {
-  CATALOG, CATALOG_BY_CATEGORY, CATEGORIES, CATEGORY_BY_KEY, DEFAULT_RGB, MARKS, hobbyVisual, matchRange, searchCatalog,
+  CATALOG, CATALOG_BY_CATEGORY, CATEGORIES, CATEGORY_BY_KEY, DEFAULT_HUE, MARKS, hobbyVisual, matchRange, searchCatalog,
 } from "@/components/hobbies/hobbyCatalog";
 
 const MAX_HOBBIES = 50;
@@ -43,19 +45,16 @@ function sanitizeList(raw) {
 
 const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
-// Round icon on a tint of the hobby's category colour.
-function IconBadge({ icon: Icon, rgb = DEFAULT_RGB, size = 40, iconSize = 18, strong = false, className = "" }) {
-  return (
-    <span aria-hidden="true" className={`relative inline-flex items-center justify-center shrink-0 rounded-full ${className}`}
-      style={{
-        width: size, height: size,
-        backgroundColor: `rgba(${rgb},${strong ? 0.2 : 0.13})`,
-        boxShadow: `inset 0 0 0 1px rgba(${rgb},${strong ? 0.3 : 0.16})`,
-      }}>
-      <Icon size={iconSize} style={{ color: `rgb(${rgb})` }} />
-    </span>
-  );
+// Hobby and category icons are Celestial glyphs: each glows in its
+// category's hue (GlyphTile on a glass tile, GlowIcon bare). Chip draws its
+// `icon` prop as a component, so every category gets one stable component
+// that renders its glyph in that light at chip size.
+function chipGlyph(icon, hue) {
+  const ChipGlyph = () => <GlowIcon icon={icon} hue={hue} size={14} />;
+  return ChipGlyph;
 }
+const ALL_CHIP_GLYPH = chipGlyph(LayoutGrid, DEFAULT_HUE);
+const CHIP_GLYPHS = Object.fromEntries(CATEGORIES.map((c) => [c.key, chipGlyph(c.icon, c.hue)]));
 
 function Highlighted({ text, query }) {
   const range = matchRange(text, query);
@@ -78,7 +77,7 @@ function HobbiesSkeleton({ label }) {
       <div className="mt-3.5 grid grid-cols-2 sm:grid-cols-3 gap-2">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.025] p-3 sm:py-2.5 sm:pl-2.5">
-            <span className={`w-10 h-10 rounded-full bg-white/[0.07] ${pulse}`} />
+            <span className={`w-10 h-10 rounded-xl bg-white/[0.07] ${pulse}`} />
             <span className={`h-2.5 rounded-full bg-white/[0.07] ${pulse}`} style={{ width: `${48 + (i % 3) * 14}%` }} />
           </div>
         ))}
@@ -309,7 +308,7 @@ export default function HobbiesPanel({ lang, onClose }) {
   return (
     <Panel onClose={onClose} size="xl" accent="fuchsia" labelledBy={titleId} testId="hobbies-panel">
       <PanelHeader
-        icon={Sparkles}
+        glyph="hobbies"
         accent="fuchsia"
         title={t("Hobilerim", "My hobbies")}
         subtitle={t(
@@ -344,11 +343,11 @@ export default function HobbiesPanel({ lang, onClose }) {
                   <span aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2">
                     {typed ? (
                       <span key={typedVisual.icon.displayName || typedVisual.rgb} className="block animate-in fade-in-0 zoom-in-75 duration-200 motion-reduce:animate-none">
-                        <IconBadge icon={typedVisual.icon} rgb={typedVisual.rgb} size={36} iconSize={17} />
+                        <GlyphTile icon={typedVisual.icon} hue={typedVisual.hue} size={36} />
                       </span>
                     ) : (
-                      <span className="flex w-9 h-9 items-center justify-center rounded-full bg-white/[0.05]">
-                        <Sparkles size={16} className="text-white/35" />
+                      <span className="flex w-9 h-9 items-center justify-center rounded-[11px] border border-white/[0.06] bg-white/[0.03]">
+                        <LunaIcon name="hobbies" size={18} className="opacity-50" />
                       </span>
                     )}
                   </span>
@@ -397,7 +396,7 @@ export default function HobbiesPanel({ lang, onClose }) {
                       onMouseMove={() => { if (!selected) setActive(i); }}
                       onClick={() => choose(option)}
                       className={`flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl px-2.5 py-1.5 transition-colors ${selected ? "bg-white/[0.07]" : ""}`}>
-                      <IconBadge icon={icon} rgb={cat ? cat.rgb : DEFAULT_RGB} size={32} iconSize={15} />
+                      <GlyphTile icon={icon} hue={cat ? cat.hue : DEFAULT_HUE} size={32} />
                       <span className="min-w-0 flex-1 truncate text-sm text-white/70">
                         {isCustom ? (
                           option.duplicate
@@ -442,15 +441,15 @@ export default function HobbiesPanel({ lang, onClose }) {
 
               {hobbies.length === 0 ? (
                 <p data-testid="hobbies-empty" className="flex items-center gap-3 rounded-2xl border border-dashed border-white/10 px-4 py-3.5 text-[13px] leading-relaxed text-white/50">
-                  <ArrowDown size={15} aria-hidden="true" className="shrink-0 text-fuchsia-300/70" />
+                  <GlowIcon icon={ArrowDown} hue={DEFAULT_HUE} size={15} />
                   {t("Henüz hobi eklemedin. Aşağıdaki önerilerden seçebilir ya da kendin yazabilirsin.", "No hobbies yet. Pick a suggestion below or type your own.")}
                 </p>
               ) : (
                 <ul ref={gridRef} className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {decorated.map(({ name, icon, rgb, category: cat }, i) => (
+                  {decorated.map(({ name, icon, hue, category: cat }, i) => (
                     <li key={name} data-testid="hobby-chip" title={name}
                       className="group relative flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.035] p-3 sm:py-2.5 sm:pl-2.5 sm:pr-10 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none">
-                      <IconBadge icon={icon} rgb={rgb} />
+                      <GlyphTile icon={icon} hue={hue} size={40} />
                       <span className="min-w-0">
                         <span id={`${baseId}-h${i}`} className="line-clamp-2 break-words text-sm font-semibold leading-snug text-white/90">{name}</span>
                         {cat && <span className="mt-0.5 block truncate text-[11.5px] text-white/40">{t(cat.shortTr, cat.shortEn)}</span>}
@@ -475,11 +474,11 @@ export default function HobbiesPanel({ lang, onClose }) {
                 </span>
               </SectionLabel>
               <ChipRail label={t("Kategoriler", "Categories")}>
-                <Chip active={category === "all"} onClick={() => setCategory("all")} icon={LayoutGrid} testId="hobby-category-all">
+                <Chip active={category === "all"} onClick={() => setCategory("all")} icon={ALL_CHIP_GLYPH} testId="hobby-category-all">
                   {t("Tümü", "All")}
                 </Chip>
                 {CATEGORIES.map((c) => (
-                  <Chip key={c.key} active={category === c.key} onClick={() => setCategory(c.key)} icon={c.icon} color={`rgb(${c.rgb})`}
+                  <Chip key={c.key} active={category === c.key} onClick={() => setCategory(c.key)} icon={CHIP_GLYPHS[c.key]}
                     testId={`hobby-category-${c.key}`}>
                     {t(c.shortTr, c.shortEn)}
                   </Chip>
@@ -494,7 +493,7 @@ export default function HobbiesPanel({ lang, onClose }) {
                   return (
                     <div key={c.key} role="group" aria-labelledby={headingId}>
                       <div className="mb-2.5 flex items-center gap-2">
-                        <IconBadge icon={c.icon} rgb={c.rgb} size={24} iconSize={13} />
+                        <GlyphTile icon={c.icon} hue={c.hue} size={24} glyph={13} />
                         <h4 id={headingId} className="text-[13px] font-semibold text-white/80">{t(c.tr, c.en)}</h4>
                         {picked > 0 && (
                           <span className="ml-auto text-xs tabular-nums text-white/40">{t(`${picked} seçili`, `${picked} selected`)}</span>
@@ -511,7 +510,8 @@ export default function HobbiesPanel({ lang, onClose }) {
                                 }`}
                                 style={added ? { borderColor: `rgba(${c.rgb},0.38)`, backgroundColor: `rgba(${c.rgb},0.08)` } : undefined}>
                                 <span className="relative shrink-0">
-                                  <IconBadge icon={entry.icon} rgb={c.rgb} size={32} iconSize={15} strong={added} />
+                                  <GlyphTile icon={entry.icon} hue={c.hue} size={32}
+                                    className={added ? "" : "opacity-80 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"} />
                                   {added && (
                                     <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full ring-2 ring-[#110c20] animate-in zoom-in-50 duration-150 motion-reduce:animate-none"
                                       style={{ backgroundColor: `rgb(${c.rgb})` }}>
