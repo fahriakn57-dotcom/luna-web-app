@@ -400,10 +400,17 @@ export default function SettingsPanel({
     }
   };
 
-  const handleSignOut = () => {
+  const doSignOut = () => {
     leavingRef.current = true;
     signOut();
     window.location.href = "/";
+  };
+  // Without a verified email (no Google sign-in, and email verification
+  // can't be completed yet) this browser holds the only way into the
+  // account: signing out could lose it for good. Ask first.
+  const handleSignOut = () => {
+    if (status === "ready" && !emailVerified) openConfirm("signout");
+    else doSignOut();
   };
 
   // Other clients may store a tone this panel doesn't offer (e.g. "playful").
@@ -729,6 +736,20 @@ export default function SettingsPanel({
         confirmLabel={t("Tümünü sil", "Delete all")}
         cancelLabel={t("Vazgeç", "Cancel")}
         onConfirm={confirmClearMemories}
+        onCancel={closeConfirm}
+      />
+
+      <ConfirmDialog
+        open={confirming === "signout"}
+        danger
+        title={t("Çıkış yapmak istediğine emin misin?", "Sign out of this device?")}
+        body={t(
+          "Bu hesap doğrulanmış bir e-postaya bağlı değil. Çıkış yaparsan sohbetlerine ve anılarına bir daha ulaşamayabilirsin. Önce Google ile giriş yaparak hesabını güvenceye almanı öneririz.",
+          "This account isn't linked to a verified email. If you sign out, you may not be able to get back to your chats and memories. We suggest securing it by signing in with Google first."
+        )}
+        confirmLabel={t("Yine de çıkış yap", "Sign out anyway")}
+        cancelLabel={t("Vazgeç", "Cancel")}
+        onConfirm={doSignOut}
         onCancel={closeConfirm}
       />
 

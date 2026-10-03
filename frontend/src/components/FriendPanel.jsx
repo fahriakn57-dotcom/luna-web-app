@@ -82,6 +82,9 @@ export default function FriendPanel({
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
   const hasMessages = messages.length > 0;
+  // Only Luna's own greeting so far (Luna.jsx buildWelcomeMessage): still a
+  // fresh chat, so the starter prompts show under it.
+  const onlyWelcome = hasMessages && messages.every((m) => String(m.id).startsWith("welcome-"));
   const busy = sending || generatingImage || generatingDoc;
 
   useEffect(() => {
@@ -228,7 +231,7 @@ export default function FriendPanel({
         <div className="flex items-center gap-2 mt-2 mb-2">
           <span className={`w-2 h-2 rounded-full ${sending || listening ? "bg-purple-400 animate-pulse" : "bg-emerald-400"}`} />
           <span className="text-xs text-white/50">
-            {listening ? (interim || t("Dinliyorum...", "Listening...")) : sending ? t("Düşünüyorum...", "Thinking...") : t("Luna aktif ve seni dinliyor", "Luna is active and listening")}
+            {listening ? (interim || t("Dinliyorum...", "Listening...")) : sending ? t("Düşünüyorum...", "Thinking...") : t("Luna burada", "Luna is here")}
           </span>
         </div>
 
@@ -281,6 +284,16 @@ export default function FriendPanel({
                 {m.safety && <CrisisCard kind={m.safety.kind} lang={lang} />}
               </Fragment>
             ))}
+            {onlyWelcome && !busy && (
+              <div className="flex flex-wrap gap-2 pl-9" data-testid="starter-prompts">
+                {(workMode ? WORK_QUICK_CHIPS : QUICK_CHIPS).map((q, i) => (
+                  <button key={i} data-testid="quick-prompt-chip" onClick={() => onSend(t(q.tr, q.en))}
+                    className="text-xs px-3.5 py-1.5 rounded-full border border-purple-400/30 text-purple-200 hover:bg-purple-400 hover:text-black transition-all hover:-translate-y-0.5">
+                    {t(q.tr, q.en)}
+                  </button>
+                ))}
+              </div>
+            )}
             {busy && (
               <div className="flex justify-start">
                 <div className="rounded-2xl border border-purple-400/20 bg-[#140b28]/90 px-4 py-3">

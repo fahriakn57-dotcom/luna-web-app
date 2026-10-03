@@ -1,6 +1,6 @@
 import { ChevronRight, X } from "lucide-react";
 import { LunaIcon, hueRgb } from "@/components/icons/LunaIcon";
-import lunaLogo from "@/assets/luna-logo.png";
+import lunaLogo from "@/assets/luna-logo.webp";
 
 const MODE_ITEMS = [
   { key: "friend", glyph: "friend", label: "Arkadaş Modu" },

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Keyboard, PhoneOff, Mic, ArrowUp, Square, Play, RotateCcw } from "lucide-react";
 import MoonCanvas from "@/components/voice/MoonCanvas";
 import CrisisCard from "@/components/CrisisCard";
-import lunaLogo from "@/assets/luna-logo.png";
+import lunaLogo from "@/assets/luna-logo.webp";
 import lunaSky from "@/assets/luna-bg.jpg";
 import { toSpoken, toChunks } from "@/lib/spokenText";
 import { haptics } from "@/lib/haptics";

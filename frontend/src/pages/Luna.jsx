@@ -52,12 +52,12 @@ const DOC_GEN_CONFIG = {
 
 const WELCOME_LINES = {
   friend: {
-    tr: (name) => `Hoş geldin${name ? `, ${name}` : ""}! 🌙 Seni tekrar görmek güzel — bugün nasıl geçiyor?`,
-    en: (name) => `Welcome back${name ? `, ${name}` : ""}! 🌙 Good to see you — how's your day going?`,
+    tr: (name) => `Merhaba${name ? ` ${name}` : ""}! 🌙 Bugün nasılsın, neler konuşalım?`,
+    en: (name) => `Hi${name ? ` ${name}` : ""}! 🌙 How are you today — what shall we talk about?`,
   },
   work: {
     tr: (name) => `Hoş geldin${name ? `, ${name}` : ""}! 🌙 LunaWorks hazır — görsel, PDF, Excel, Word, ne istersen üretmeye başlayalım.`,
-    en: (name) => `Welcome back${name ? `, ${name}` : ""}! 🌙 LunaWorks is ready — let's create an image, PDF, Excel, Word, whatever you need.`,
+    en: (name) => `Welcome${name ? `, ${name}` : ""}! 🌙 LunaWorks is ready — let's create an image, PDF, Excel, Word, whatever you need.`,
   },
 };
 
@@ -112,7 +112,13 @@ function buildWelcomeMessage(mode, lang, name) {
 }
 
 export default function Luna() {
-  const [booting, setBooting] = useState(() => !sessionStorage.getItem("luna_booted"));
+  const [booting, setBooting] = useState(() => {
+    try {
+      return !localStorage.getItem("luna_booted");
+    } catch {
+      return false;
+    }
+  });
   const [mode, setMode] = useState(() => {
     // "jarvis" is a stale value from before L.U.N.A. Modu was removed —
     // never let an old localStorage entry land a user on a mode that no
@@ -559,7 +565,12 @@ export default function Luna() {
     toast.success(t("Telefonunla eşleştirildi 🌙", "Paired with your phone 🌙"));
   };
 
-  if (booting) return <BootSequence lang={lang} onDone={() => { sessionStorage.setItem("luna_booted", "1"); setBooting(false); }} />;
+  if (booting) {
+    return <BootSequence lang={lang} onDone={() => {
+      try { localStorage.setItem("luna_booted", "1"); } catch { /* shows again next time */ }
+      setBooting(false);
+    }} />;
+  }
 
   return (
     <div className="relative h-screen overflow-hidden flex bg-[#05040c]" data-testid="luna-app">

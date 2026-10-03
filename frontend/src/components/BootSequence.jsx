@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import lunaLogo from "@/assets/luna-logo.png";
+import lunaLogo from "@/assets/luna-logo.webp";
 import lunaBg from "@/assets/luna-bg.jpg";
 
 const LINES_TR = [

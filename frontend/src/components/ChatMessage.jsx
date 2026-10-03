@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, X, FileText, Maximize2 } from "lucide-react";
-import lunaAvatar from "@/assets/luna-avatar.png";
+import lunaAvatar from "@/assets/luna-avatar.webp";
 
 export default function ChatMessage({ msg }) {
   const isUser = msg.role === "user";

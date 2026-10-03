@@ -94,6 +94,53 @@ export function signOut() {
   localStorage.removeItem(AUTHED_KEY);
 }
 
+// An account holds one device at a time: logging in somewhere else gives
+// that device a new secret, and this one's requests start failing with 401.
+// Before (launch audit 2026-10-03) every send then ended in "küçük bir
+// sorun" forever with no way back to the login screen. Now the first 401 on
+// a request that carried this device's secret signs this browser out and
+// reloads to the account gate, which says why (consumeSessionLost).
+const SESSION_LOST_KEY = "luna_session_lost";
+let sessionLostHandled = false;
+
+function sessionLost() {
+  if (sessionLostHandled || !isAuthed()) return;
+  sessionLostHandled = true;
+  signOut();
+  try {
+    sessionStorage.setItem(SESSION_LOST_KEY, "1");
+  } catch {
+    // the gate just won't say why
+  }
+  window.location.assign(`${process.env.PUBLIC_URL || ""}/`);
+}
+
+// True once, right after sessionLost() sent this browser to the gate.
+export function consumeSessionLost() {
+  try {
+    const lost = sessionStorage.getItem(SESSION_LOST_KEY) === "1";
+    sessionStorage.removeItem(SESSION_LOST_KEY);
+    return lost;
+  } catch {
+    return false;
+  }
+}
+
+function sentDeviceSecret(headers) {
+  if (!headers) return false;
+  const get = typeof headers.get === "function" ? (k) => headers.get(k) : (k) => headers[k];
+  return Boolean(get("X-Device-Secret") || get("x-device-secret"));
+}
+
+axios.interceptors.response.use(undefined, (error) => {
+  const cfg = error?.config || {};
+  // /auth/* answers 401 for a wrong password or Google token — not a lost session.
+  if (error?.response?.status === 401 && !String(cfg.url || "").includes("/auth/") && sentDeviceSecret(cfg.headers)) {
+    sessionLost();
+  }
+  return Promise.reject(error);
+});
+
 // Creates a brand-new account: registers this browser as a fresh device
 // (if it isn't one already), then attaches email+password to it so it can
 // be recovered from other devices later via loginWithEmail().
@@ -431,6 +478,7 @@ export async function streamVoiceChat({ message, mode, lang, conversationId, moo
       throw brokenOff(e);
     }
     if (!res.ok) {
+      if (res.status === 401) sessionLost();
       let detail = "";
       try {
         const body = await res.json();

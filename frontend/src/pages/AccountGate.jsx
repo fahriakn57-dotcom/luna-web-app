@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Mail, ArrowRight, Loader2, Lock, ShieldCheck, Fingerprint, User, ChevronDown, Globe } from "lucide-react";
-import accountGateBg from "@/assets/account-gate.png";
+import accountGateBg from "@/assets/account-gate.webp";
 import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
-import { signupWithEmail, loginWithEmail, loginWithGoogle, forgotPassword, fetchProfile, updateProfile, fetchFeatures } from "@/lib/api";
+import { signupWithEmail, loginWithEmail, loginWithGoogle, forgotPassword, fetchProfile, updateProfile, fetchFeatures, consumeSessionLost } from "@/lib/api";
 
 const SUPPORT_EMAIL = "xsfei.technology@gmail.com";
 
@@ -383,6 +383,16 @@ export default function AccountGate({ lang, setLang, onDone }) {
     let alive = true;
     fetchFeatures().then((f) => { if (alive && f) setEmailOn(!!f.email); });
     return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    if (consumeSessionLost()) {
+      toast.message(
+        t("Hesabına başka bir cihazdan giriş yapıldığı için bu cihazdaki oturum kapandı. Devam etmek için tekrar giriş yap.",
+          "Your account was signed in on another device, so this one was signed out. Log in again to continue."),
+        { duration: 10000 }
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // GIS is initialized once on mount, but the TR/EN toggle can change `lang`
   // afterwards — route its callback through a ref so the sign-in toasts use
