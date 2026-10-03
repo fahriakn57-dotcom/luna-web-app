@@ -3,7 +3,27 @@ import { toast } from "sonner";
 import { Mail, ArrowRight, Loader2, Lock, ShieldCheck, Fingerprint, User, ChevronDown, Globe } from "lucide-react";
 import accountGateBg from "@/assets/account-gate.png";
 import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
-import { signupWithEmail, loginWithEmail, loginWithGoogle, forgotPassword, fetchProfile, updateProfile } from "@/lib/api";
+import { signupWithEmail, loginWithEmail, loginWithGoogle, forgotPassword, fetchProfile, updateProfile, fetchFeatures } from "@/lib/api";
+
+const SUPPORT_EMAIL = "xsfei.technology@gmail.com";
+
+// "Seen this browser log in before" — picks the greeting (a first visit is
+// not "good to see you again"). A convenience only; never a security signal.
+const RETURNING_KEY = "luna_returning";
+function readReturning() {
+  try {
+    return localStorage.getItem(RETURNING_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function markReturning() {
+  try {
+    localStorage.setItem(RETURNING_KEY, "1");
+  } catch {
+    // private mode / blocked storage: the greeting just stays generic
+  }
+}
 
 // Google Identity Services Client ID — public by design (Google's own docs:
 // this is not a secret, only server-side ID-token verification is
@@ -17,22 +37,28 @@ const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID;
 // Drawing it in code means nothing outside AccountGate.jsx can change how
 // this renders. Shape/proportions match the small top-left "LUNA" wordmark
 // logo used across the site — a tall, clean crescent, no circular backdrop.
-const LunaMoonBadge = () => (
+// GateCard is mounted twice (desktop + mobile, one hidden by CSS): with one
+// fixed gradient id the first — hidden — copy owned it, and on phones the
+// crescent rendered as a bare dot. useId gives each copy its own.
+const LunaMoonBadge = () => {
+  const gradId = `moon-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  return (
   <svg width="56" height="56" viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <linearGradient id="moonGrad" x1="0" y1="0" x2="1" y2="1">
+      <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
         <stop offset="0%" stopColor="#e9d5ff" />
         <stop offset="100%" stopColor="#8b5cf6" />
       </linearGradient>
     </defs>
     <path
       d="M52 10c-6.2 6.4-10 15.1-10 24.7 0 19.6 15.9 35.5 35.5 35.5 1.7 0 3.4-.12 5-.35C76.7 88.3 63.4 96 48.3 96 24.8 96 5.8 77 5.8 53.5S24.8 11 48.3 11c1.25 0 2.48.06 3.7.18Z"
-      fill="url(#moonGrad)"
+      fill={`url(#${gradId})`}
       transform="translate(4 -4) scale(0.72)"
     />
     <circle cx="63" cy="12" r="3.2" fill="#e9d5ff" />
   </svg>
-);
+  );
+};
 
 const GoogleIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24">
@@ -49,7 +75,36 @@ const TRUST = [
   { icon: User, tr: "Her Zaman\nSeninle", en: "Always\nWith You" },
 ];
 
-function GoogleButtonSlot({ t, googleAvailable, onGoogleClick, extraClass = "" }) {
+// Google's OWN sign-in button, visible, once Google Identity Services has
+// loaded (launch audit 2026-10-03): our button only called One Tap
+// (prompt()), which shows nothing when the browser isn't signed in to Google
+// — typical on iPhone Safari and in private windows — or after the user
+// closed it once (Google then mutes it for a while), so the main sign-in
+// silently did nothing for many people. Google's button opens its sign-in
+// window in every one of those cases. (Not the old INVISIBLE overlay — that
+// failed when a click missed the hidden iframe; this one is what you click.)
+function OfficialGoogleButton({ lang, extraClass }) {
+  const hostRef = useRef(null);
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el || !window.google?.accounts?.id) return;
+    el.innerHTML = "";
+    window.google.accounts.id.renderButton(el, {
+      type: "standard",
+      theme: "outline",
+      size: "large",
+      shape: "pill",
+      text: "continue_with",
+      logo_alignment: "center",
+      width: Math.round(Math.min(400, Math.max(220, el.offsetWidth || 300))),
+      locale: lang === "tr" ? "tr" : "en",
+    });
+  }, [lang]);
+  return <div ref={hostRef} data-testid="gate-google-button" className={`flex min-h-[44px] w-full justify-center ${extraClass}`} />;
+}
+
+function GoogleButtonSlot({ t, lang, googleAvailable, gisReady, onGoogleClick, extraClass = "" }) {
+  if (googleAvailable && gisReady) return <OfficialGoogleButton lang={lang} extraClass={extraClass} />;
   // A REAL button with our own onClick — not an invisible iframe overlay
   // forwarded to. The overlay approach (render Google's real button into a
   // hidden container, position an invisible copy on top of this one) turned
@@ -68,7 +123,7 @@ function GoogleButtonSlot({ t, googleAvailable, onGoogleClick, extraClass = "" }
   );
 }
 
-function GateCard({ lang, setLang, view, setView, email, setEmail, password, setPassword, loading, googleAvailable, onGoogleClick, onSubmit, onOpenForgot, onForgotSubmit, forgotSent, termsAccepted, setTermsAccepted, specialConsent, setSpecialConsent }) {
+function GateCard({ lang, setLang, view, setView, email, setEmail, password, setPassword, loading, googleAvailable, gisReady, onGoogleClick, onSubmit, onOpenForgot, onForgotSubmit, forgotSent, termsAccepted, setTermsAccepted, specialConsent, setSpecialConsent, emailOn, returning }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
   // GateCard is mounted twice at once (desktop + mobile layouts, one of them
   // hidden by CSS) — useId keeps each copy's checkbox ids unique so every
@@ -98,10 +153,16 @@ function GateCard({ lang, setLang, view, setView, email, setEmail, password, set
 
       {view === "choice" && (
         <>
-          <p className="text-center text-base font-bold mb-1">{t("Tekrar görmek güzel.", "Good to see you again.")} 💜</p>
-          <p className="text-center text-xs text-white/45 mb-5">{t("Devam etmek için giriş yap.", "Log in to continue.")}</p>
+          <p className="text-center text-base font-bold mb-1">
+            {returning ? t("Tekrar görmek güzel.", "Good to see you again.") : t("Luna ile tanış.", "Meet Luna.")} 💜
+          </p>
+          <p className="text-center text-xs text-white/60 mb-5">
+            {returning
+              ? t("Devam etmek için giriş yap.", "Log in to continue.")
+              : t("Ücretsiz hesabını birkaç saniyede oluştur.", "Create your free account in seconds.")}
+          </p>
 
-          <GoogleButtonSlot t={t} googleAvailable={googleAvailable} onGoogleClick={onGoogleClick} />
+          <GoogleButtonSlot t={t} lang={lang} googleAvailable={googleAvailable} gisReady={gisReady} onGoogleClick={onGoogleClick} />
 
           <div className="flex items-center gap-2 my-4">
             <div className="flex-1 h-px bg-white/10" />
@@ -143,16 +204,28 @@ function GateCard({ lang, setLang, view, setView, email, setEmail, password, set
               : t("Birkaç saniyede hesabını oluştur.", "Create your account in seconds.")}
           </p>
 
+          {emailOn === false && (
+            // Until the email service is set up, an email account can't be
+            // verified — and an unverified one can't log in on another
+            // device or after browser data is cleared. Say so up front.
+            <p data-testid="gate-email-off-note" className="mb-4 rounded-2xl border border-amber-200/25 bg-amber-200/10 px-3.5 py-2.5 text-xs leading-relaxed text-amber-50/90">
+              {t(
+                "E-posta doğrulaması şu an çalışmıyor: e-postayla açılan bir hesaba başka bir cihazdan ya da tarayıcı verilerini sildikten sonra giriş yapılamayabilir. Hesabını kaybetmemek için Google ile devam etmeni öneririz.",
+                "Email verification isn't working right now: an email account may not open on another device or after browser data is cleared. To keep your account safe, continue with Google."
+              )}
+            </p>
+          )}
           <form onSubmit={onSubmit} className="space-y-3">
             <div className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/20 px-4 py-2.5">
               <Mail size={15} className="text-white/40 shrink-0" />
-              <input type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)}
+              <input type="email" required autoFocus autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)}
                 placeholder={t("E-posta", "Email")} data-testid="gate-email-input"
                 className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30" />
             </div>
             <div className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/20 px-4 py-2.5">
               <Lock size={15} className="text-white/40 shrink-0" />
               <input type="password" required minLength={view === "signup" ? 8 : undefined} value={password} onChange={(e) => setPassword(e.target.value)}
+                autoComplete={view === "signup" ? "new-password" : "current-password"}
                 placeholder={view === "signup" ? t("Şifre (en az 8 karakter)", "Password (min. 8 characters)") : t("Şifre", "Password")}
                 data-testid="gate-password-input"
                 className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30" />
@@ -211,7 +284,7 @@ function GateCard({ lang, setLang, view, setView, email, setEmail, password, set
             </button>
           )}
 
-          <GoogleButtonSlot t={t} googleAvailable={googleAvailable} onGoogleClick={onGoogleClick} extraClass="mt-3" />
+          <GoogleButtonSlot t={t} lang={lang} googleAvailable={googleAvailable} gisReady={gisReady} onGoogleClick={onGoogleClick} extraClass="mt-3" />
 
           <button onClick={() => setView("choice")} data-testid="gate-back-button"
             className="w-full text-center text-[11px] text-white/35 hover:text-white/60 mt-5 transition-colors">
@@ -223,7 +296,20 @@ function GateCard({ lang, setLang, view, setView, email, setEmail, password, set
       {view === "forgot" && (
         <>
           <h3 className="text-center text-sm font-bold mb-0.5">{t("Şifremi unuttum", "Forgot password")}</h3>
-          {forgotSent ? (
+          {emailOn === false ? (
+            <>
+              <p data-testid="gate-forgot-email-off" className="text-center text-xs text-white/70 mb-4 leading-relaxed">
+                {t(
+                  "Şifre sıfırlama e-postaları şu an gönderilemiyor. E-postan bir Google hesabıysa aşağıdan Google ile giriş yapabilirsin; hesabın ve sohbetlerin korunur.",
+                  "Password reset emails can't be sent right now. If your email is a Google account, sign in with Google below — your account and chats are kept."
+                )}
+              </p>
+              <GoogleButtonSlot t={t} lang={lang} googleAvailable={googleAvailable} gisReady={gisReady} onGoogleClick={onGoogleClick} />
+              <p className="text-center text-xs text-white/60 mt-4">
+                {t("Yardım için:", "Need help?")} <span className="select-all text-indigo-200">{SUPPORT_EMAIL}</span>
+              </p>
+            </>
+          ) : forgotSent ? (
             <p className="text-center text-xs text-white/60 mb-5 leading-relaxed">
               {t(
                 "Bu e-postaya bağlı bir hesap varsa, şifreni sıfırlaman için bir link gönderdik. Gelen kutunu kontrol et.",
@@ -238,7 +324,7 @@ function GateCard({ lang, setLang, view, setView, email, setEmail, password, set
               <form onSubmit={onForgotSubmit} className="space-y-3">
                 <div className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/20 px-4 py-2.5">
                   <Mail size={15} className="text-white/40 shrink-0" />
-                  <input type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)}
+                  <input type="email" required autoFocus autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)}
                     placeholder={t("E-posta", "Email")} data-testid="gate-forgot-email-input"
                     className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30" />
                 </div>
@@ -288,6 +374,16 @@ export default function AccountGate({ lang, setLang, onDone }) {
   // onGoogleClick below to show a clear message instead of silently
   // calling prompt() on an API that never finished loading.
   const [gisFailed, setGisFailed] = useState(false);
+  // Google's own button replaces ours once GIS has loaded (GoogleButtonSlot).
+  const [gisReady, setGisReady] = useState(false);
+  // null = not known yet; false = verification/reset emails can't be sent.
+  const [emailOn, setEmailOn] = useState(null);
+  const [returning] = useState(readReturning);
+  useEffect(() => {
+    let alive = true;
+    fetchFeatures().then((f) => { if (alive && f) setEmailOn(!!f.email); });
+    return () => { alive = false; };
+  }, []);
   // GIS is initialized once on mount, but the TR/EN toggle can change `lang`
   // afterwards — route its callback through a ref so the sign-in toasts use
   // the current language, not the one the page loaded with.
@@ -309,6 +405,7 @@ export default function AccountGate({ lang, setLang, onDone }) {
         client_id: GOOGLE_CLIENT_ID,
         callback: (response) => credentialHandlerRef.current?.(response),
       });
+      setGisReady(true);
     };
     const onError = () => {
       clearTimeout(failTimer);
@@ -348,7 +445,8 @@ export default function AccountGate({ lang, setLang, onDone }) {
     setLoading(true);
     try {
       await loginWithGoogle(response.credential);
-      toast.success(t("Tekrar görmek güzel! 💜", "Welcome back! 💜"));
+      toast.success(returning ? t("Tekrar görmek güzel! 💜", "Welcome back! 💜") : t("Hoş geldin! 💜", "Welcome! 💜"));
+      markReturning();
       onDone();
     } catch (err) {
       const status = err?.response?.status;
@@ -390,8 +488,8 @@ export default function AccountGate({ lang, setLang, onDone }) {
         null;
       if (reason) {
         toast.error(
-          t(`Google giriş penceresi açılamadı (${reason}). E-posta ile giriş yapabilirsin.`,
-             `Google's sign-in window couldn't open (${reason}). You can log in with email instead.`)
+          t("Google penceresi açılamadı. Biraz sonra tekrar dene ya da e-posta ile devam et.",
+             "Google's sign-in window couldn't open. Try again in a moment, or continue with email.")
         );
       }
     });
@@ -427,6 +525,7 @@ export default function AccountGate({ lang, setLang, onDone }) {
         await loginWithEmail(email.trim(), password);
         toast.success(t("Tekrar görmek güzel! 💜", "Welcome back! 💜"));
       }
+      markReturning();
       onDone();
     } catch (err) {
       const status = err?.response?.status;
@@ -434,7 +533,11 @@ export default function AccountGate({ lang, setLang, onDone }) {
       if (view === "login" && status === 401) {
         toast.error(t("E-posta veya şifre hatalı.", "Wrong email or password."));
       } else if (view === "login" && status === 403) {
-        toast.error(t("E-postanı henüz doğrulamadın — gelen kutunu kontrol et.", "You haven't verified your email yet — check your inbox."));
+        toast.error(emailOn === false
+          ? t("Bu hesabın e-postası doğrulanmamış ve doğrulama e-postaları şu an gönderilemiyor. E-postan bir Google hesabıysa 'Google ile Devam Et' ile girebilirsin.",
+              "This account's email isn't verified, and verification emails can't be sent right now. If your email is a Google account, use 'Continue with Google'.")
+          : t("E-postanı henüz doğrulamadın — gelen kutunu kontrol et.", "You haven't verified your email yet — check your inbox."),
+          { duration: 9000 });
       } else if (view === "signup" && status === 409) {
         toast.error(t("Bu e-posta zaten kullanımda. Giriş yapmayı dene.", "That email is already in use. Try logging in."));
       } else if (status === 400 && detail) {
@@ -475,7 +578,7 @@ export default function AccountGate({ lang, setLang, onDone }) {
   // guessing whether GIS will finish loading before the user gives up.
   const cardProps = {
     lang, setLang, view, setView, email, setEmail, password, setPassword, loading,
-    googleAvailable: !!GOOGLE_CLIENT_ID, onGoogleClick, onSubmit: handleSubmit,
+    googleAvailable: !!GOOGLE_CLIENT_ID, gisReady, onGoogleClick, onSubmit: handleSubmit, emailOn, returning,
     onOpenForgot: () => { setForgotSent(false); setView("forgot"); },
     onForgotSubmit: handleForgotSubmit, forgotSent,
     termsAccepted, setTermsAccepted, specialConsent, setSpecialConsent,

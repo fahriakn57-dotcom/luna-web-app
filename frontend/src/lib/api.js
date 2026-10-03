@@ -254,6 +254,18 @@ function chatBody({ message, mode, lang, conversationId, voice, mood }) {
 // same key is answered once (a repeat gets that answer replayed, or 409
 // while it is still being written). See streamVoiceChat. signal: cancels it
 // (the voice call was hung up).
+// Which optional services work right now (GET /api/features, no account
+// needed) — e.g. email: false while verification/reset emails can't be sent.
+// null when the server can't be asked; callers then keep their defaults.
+export async function fetchFeatures() {
+  try {
+    const res = await axios.get(`${API}/features`, { timeout: 8000 });
+    return res.data || null;
+  } catch {
+    return null;
+  }
+}
+
 // onSafety(safety): called when the server flagged the message (self-harm
 // or abuse — backend services/safety.py), so the app can show the help card.
 export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null, idempotencyKey = null, signal = null, onSafety = null }) {
