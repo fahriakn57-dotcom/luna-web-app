@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Keyboard, PhoneOff, Mic, ArrowUp, Square, Play, RotateCcw } from "lucide-react";
 import MoonCanvas from "@/components/voice/MoonCanvas";
+import CrisisCard from "@/components/CrisisCard";
 import lunaLogo from "@/assets/luna-logo.png";
 import lunaSky from "@/assets/luna-bg.jpg";
 import { toSpoken, toChunks } from "@/lib/spokenText";
@@ -115,7 +116,7 @@ function useScreenWakeLock(enabled, quiet) {
 export default function VoiceCallModal({
   lang, state, capturing, interim, pendingText, speechError, supported = true, lastSent, replyText, canSkipVoice = false,
   voiceFailedMessage, turnFailed = false, canReplay, handsFree, autoPaused, coach, speechProgress, analyser,
-  flareKey, exiting, onMainAction, onTalkInstead, onReplay, onToggleHandsFree, onClose,
+  flareKey, exiting, onMainAction, onTalkInstead, onReplay, onToggleHandsFree, onClose, safety = null,
 }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
   const startedAt = useRef(Date.now());
@@ -353,6 +354,14 @@ export default function VoiceCallModal({
           </span>
         </span>
       </header>
+
+      {/* A flagged message in this call (backend services/safety.py): the
+          emergency numbers stay on screen until the call ends. */}
+      {safety?.kind && (
+        <div className="relative mx-auto mt-3 w-full max-w-md shrink-0 px-5">
+          <CrisisCard kind={safety.kind} lang={lang} compact />
+        </div>
+      )}
 
       {/* Reserved space — the moon is drawn centred on it and sized to fit
           (MoonCanvas), so it may shrink on short screens. */}

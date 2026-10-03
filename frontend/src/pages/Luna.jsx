@@ -264,6 +264,13 @@ export default function Luna() {
   });
   callRef.current = call;
 
+  // The help card for a flagged message said in the call (see handleSend),
+  // shown on the call screen until the call ends.
+  const [callSafety, setCallSafety] = useState(null);
+  useEffect(() => {
+    if (!call.active) setCallSafety(null);
+  }, [call.active]);
+
   useReminderAlerts({ lang });
 
   // The chat composer's mic has no screen of its own (the call shows its
@@ -335,11 +342,16 @@ export default function Luna() {
     try {
       // A mood picked on an earlier day no longer applies.
       const todaysMood = mood && localStorage.getItem("luna_mood_day") === dayKey() ? mood : null;
-      const args = { message: content, mode, lang, conversationId, mood: todaysMood };
+      // The server flags a message about self-harm or abuse (backend
+      // services/safety.py): its reply then carries the help card.
+      let safety = null;
+      const onSafety = (s) => { safety = s; };
+      const args = { message: content, mode, lang, conversationId, mood: todaysMood, onSafety };
       // A spoken turn streams (she starts talking at her first sentence).
       const reply = voice ? await sendSpokenTurn(args, callRef, callGen, turnId, signal) : await sendChat(args);
-      const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode };
+      const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode, ...(safety ? { safety } : {}) };
       setMessages((m) => [...m, lunaMsg]);
+      if (voice && safety) setCallSafety(safety);
       // Chat text replies stay silent by default — Luna only speaks while
       // the dedicated voice-call screen is open (there the whole reply
       // finishes what streamed in, or is said from its start).
@@ -656,7 +668,7 @@ export default function Luna() {
       {openPanel === "work-chart" && <DocGeneratorPanel kind="chart" lang={lang} mode={mode} onClose={() => setOpenPanel(null)} />}
       {premiumOpen && <PremiumPanel lang={lang} onClose={() => setPremiumOpen(false)} />}
 
-      {call.active && <VoiceCallModal lang={lang} {...call.modalProps} />}
+      {call.active && <VoiceCallModal lang={lang} {...call.modalProps} safety={callSafety} />}
 
       {termsProfile && (
         <TermsGate

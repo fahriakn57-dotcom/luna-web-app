@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Send, Mic, MicOff, Menu, Paperclip, X, Wand2, Phone } from "lucide-react";
 import { toast } from "sonner";
 import ChatMessage from "@/components/ChatMessage";
+import CrisisCard from "@/components/CrisisCard";
 import { IconTile, LunaIcon, hueRgb } from "@/components/icons/LunaIcon";
 import { GlyphTile, GlowIcon } from "@/components/icons/GlyphTile";
 
@@ -275,7 +276,10 @@ export default function FriendPanel({
               </div>
             )}
             {messages.map((m) => (
-              <ChatMessage key={m.id} msg={m} />
+              <Fragment key={m.id}>
+                <ChatMessage msg={m} />
+                {m.safety && <CrisisCard kind={m.safety.kind} lang={lang} />}
+              </Fragment>
             ))}
             {busy && (
               <div className="flex justify-start">
@@ -390,6 +394,10 @@ export default function FriendPanel({
                 <Send size={17} />
               </button>
             </div>
+            <p data-testid="ai-disclaimer" className="mt-2 px-2 text-center text-xs text-white/60">
+              {t("Luna bir yapay zekadır; hata yapabilir ve profesyonel desteğin yerini tutmaz.",
+                "Luna is an AI. It can make mistakes and can't replace professional support.")}
+            </p>
           </div>
         </div>
     </div>

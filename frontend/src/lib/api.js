@@ -199,6 +199,9 @@ function toWebMessage(m) {
     // \w is ASCII-only — \p{L}\p{N} (Unicode property escapes) keeps
     // Turkish letters (ç/ğ/ı/ö/ş/ü) instead of stripping them from the name.
     fileName: generated ? `${(meta.title || "luna-dosya").replace(/[^\p{L}\p{N}\s-]/gu, "").trim() || "luna-dosya"}.${generated.ext}` : undefined,
+    // A reply to a message the server flagged (backend services/safety.py):
+    // the help card with the emergency numbers stays under it after a reload.
+    safety: meta.safety ? { kind: meta.safety } : undefined,
   };
 }
 
@@ -251,7 +254,9 @@ function chatBody({ message, mode, lang, conversationId, voice, mood }) {
 // same key is answered once (a repeat gets that answer replayed, or 409
 // while it is still being written). See streamVoiceChat. signal: cancels it
 // (the voice call was hung up).
-export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null, idempotencyKey = null, signal = null }) {
+// onSafety(safety): called when the server flagged the message (self-harm
+// or abuse — backend services/safety.py), so the app can show the help card.
+export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null, idempotencyKey = null, signal = null, onSafety = null }) {
   const headers = await authHeaders();
   if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
   const res = await axios.post(
@@ -261,6 +266,11 @@ export async function sendChat({ message, mode, lang, conversationId, voice = fa
     // 2-4 s, so 45 s means something is stuck (the call then says so).
     { headers, ...(signal ? { signal } : {}), ...(voice ? { timeout: 45000 } : {}) }
   );
+  if (res.data?.safety) {
+    try {
+      onSafety?.(res.data.safety);
+    } catch (_) {}
+  }
   return res.data.reply;
 }
 
@@ -338,7 +348,7 @@ function sseReader(onData) {
   };
 }
 
-export async function streamVoiceChat({ message, mode, lang, conversationId, mood = null, signal, onDelta, idempotencyKey = null }) {
+export async function streamVoiceChat({ message, mode, lang, conversationId, mood = null, signal, onDelta, idempotencyKey = null, onSafety = null }) {
   const headers = { ...(await authHeaders()), "Content-Type": "application/json", Accept: "text/event-stream" };
   if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
   const ctl = new window.AbortController();
@@ -376,6 +386,11 @@ export async function streamVoiceChat({ message, mode, lang, conversationId, moo
       } catch (_) {} // (the caller's trouble must not lose the reply)
     } else if (event?.type === "assistant_completed") {
       reply = typeof event.reply === "string" ? event.reply : written;
+      if (event.safety) {
+        try {
+          onSafety?.(event.safety);
+        } catch (_) {}
+      }
     } else if (event?.type === "task_failed") {
       failure = httpLikeError(failedStatus(event), typeof event.detail === "string" ? event.detail : "");
     }
