@@ -11,12 +11,16 @@ import { browserVoiceSupported, sayWithBrowser, unlockBrowserVoice } from "@/lib
 //    analyser for the visuals is attached once too (lib/voiceAudio.js).
 //
 // 2. A reply spoken piece by piece (lib/speechChunks.js): pieces are fetched
-//    at most two at a time — the first two as soon as the reply arrives, the
-//    next whenever one is done — and played strictly in order, the first as
-//    soon as it is there. If the next piece isn't there when one ends, the
-//    player waits for it (the call still counts as speaking: no mic, no idle
-//    flash). A dropped connection or a gateway error is asked for once more
-//    (see worthRetrying).
+//    at most two at a time — each as soon as it is there and a request is
+//    free — and played strictly in order, the first as soon as it is there.
+//    The reply may still be streaming in when she starts (speak() with
+//    open: true): grow() hands over the pieces cut since, and that no more
+//    will come. If the next piece isn't there when one ends — not fetched
+//    yet, or not even cut yet — the player waits for it (the call still
+//    counts as speaking: no mic, no idle flash). A dropped connection or a
+//    gateway error is asked for once more (see worthRetrying). Her first
+//    piece also waits for a "hmm" she may be saying meanwhile
+//    (lib/voiceFiller.js) to finish — see held().
 //
 // 3. A piece the server's voice can't make — its TTS is busy (503
 //    "tts_busy"), refuses the text (400), or still fails after the retry —
@@ -95,11 +99,18 @@ function silentClip() {
   return silentUrl;
 }
 
+// A piece was said to its end: in the reply it is followed by a space (the
+// pieces joined by single spaces are the reply's spoken text — see
+// lib/speechChunks.js), so the reply's last word counts as its very end.
+function pieceSaid(r, text) {
+  r.done += text.length + 1;
+}
+
 export function createVoicePlayer() {
   let el = null;
   let analyser = null;
   let run = null; // the reply being spoken (see speak()); null when she is silent
-  let lastProgress = 0; // held after a reply ends, so captions never jump back before they go
+  let lastSaid = 0; // held after a reply ends, so captions never jump back before they go
 
   // The run whose current piece the element is playing — media events of
   // anything else (the unlock blip, a piece that was switched away from, a
@@ -129,7 +140,7 @@ export function createVoicePlayer() {
   const onEnded = () => {
     const r = current();
     if (!r) return;
-    r.done += r.pieces[r.index].text.length;
+    pieceSaid(r, r.pieces[r.index].text);
     next(r);
   };
   const onError = () => {
@@ -253,7 +264,7 @@ export function createVoicePlayer() {
           if (!mine()) return;
           r.voice = null;
           watchPage(false);
-          r.done += text.length;
+          pieceSaid(r, text);
           next(r);
         },
         onError: (code) => {
@@ -284,11 +295,32 @@ export function createVoicePlayer() {
     watchPage(true);
   };
 
+  // Her first piece waits while something else of hers is still sounding
+  // (a "hmm" said while the reply was on its way — r.before(), see speak()).
+  // Returns whether it waits; once that is over, the piece plays (or is
+  // waited for as usual). Later pieces never wait for it.
+  const held = (r) => {
+    if (r.gate) return true;
+    const gate = r.before?.();
+    if (!gate) return false;
+    r.gate = gate;
+    gate.then(() => {
+      if (r.gate !== gate) return;
+      r.gate = null;
+      if (r === run && r.waiting && r.index === 0) play(r);
+    });
+    return true;
+  };
+
   // Play the run's current piece, or wait for it.
   const play = (r) => {
     const s = r.st[r.index];
     if (s.status === "failed") {
       fail(r, s.error);
+      return;
+    }
+    if (r.index === 0 && held(r)) {
+      r.waiting = true;
       return;
     }
     if (s.status === "synth") {
@@ -308,17 +340,31 @@ export function createVoicePlayer() {
     start(r);
   };
 
+  // Her last word: the reply is complete and every piece of it was said.
+  const finish = (r) => {
+    run = null;
+    lastSaid = r.done;
+    r.on.onDone?.();
+  };
+
   const next = (r) => {
     r.index += 1;
     r.from = 0;
-    if (r.index >= r.pieces.length) {
-      run = null;
-      lastProgress = 1;
-      r.on.onDone?.();
+    if (r.index >= r.st.length) {
+      // The reply is still streaming in: wait for its next piece (grow()).
+      if (r.open) r.waiting = true;
+      else finish(r);
       return;
     }
     play(r);
   };
+
+  const pieceState = (p, synth) => ({
+    status: p.url ? "ready" : p.synth && synth ? "synth" : "idle",
+    tries: 0,
+    ctl: null,
+    error: null,
+  });
 
   const pump = (r) => {
     for (let i = 0; i < r.st.length && i < r.stopAt && r.inFlight < IN_FLIGHT; i++) {
@@ -413,37 +459,53 @@ export function createVoicePlayer() {
     // Speak a reply: pieces [{text, url, synth}] (url set = already fetched,
     // synth = said by the device last time, e.g. "Tekrar dinle"),
     // fetchPiece(index, signal) -> Promise<blob URL>, lang ("tr-TR" |
-    // "en-US", for the device's voice), and the callbacks onPieceReady(i),
-    // onPlaying(i), onPaused(), onDone(), onFailed(i, error). Replaces
-    // whatever was being said.
-    speak({ pieces, fetchPiece, lang, ...on }) {
+    // "en-US", for the device's voice), open (the reply is still streaming
+    // in: more pieces come through grow()), before() -> a promise to wait
+    // for before her first piece plays, or null (asked when that piece is
+    // about to play), and the callbacks onPieceReady(i), onPlaying(i),
+    // onPaused(), onDone(), onFailed(i, error). Replaces whatever was being
+    // said.
+    speak({ pieces, fetchPiece, lang, open = false, before = null, ...on }) {
       halt();
       const synth = browserVoiceSupported();
       const r = {
         pieces,
         fetchPiece,
+        before,
+        gate: null,       // ...what her first piece is waiting for (see held())
         on,
         lang: lang || "tr-TR",
-        st: pieces.map((p) => ({
-          status: p.url ? "ready" : p.synth && synth ? "synth" : "idle",
-          tries: 0,
-          ctl: null,
-          error: null,
-        })),
+        open,
+        st: pieces.map((p) => pieceState(p, synth)),
         index: -1,      // the piece being played (or waited for)
         waiting: false, // ...waited for: it hasn't arrived yet
         paused: false,
-        done: 0,        // characters of the pieces already said
-        total: pieces.reduce((n, p) => n + p.text.length, 0),
+        done: 0,        // characters of the reply already said (whole pieces)
         inFlight: 0,
         stopAt: Infinity, // a piece failed for good: nothing from it on is said
         voice: null,      // the device saying the current piece (lib/browserVoice.js)
         from: 0,          // ...from this character on (after a pause)
       };
       run = r;
-      lastProgress = 0;
+      lastSaid = 0;
       pump(r);
       next(r); // (synchronously, so "Tekrar dinle" plays inside its tap)
+    },
+
+    // The reply given to speak() as `pieces` has more pieces now (the caller
+    // added them to that same array), and/or (done) it is complete. Ignored
+    // when that reply isn't being said any more (interrupted, stopped).
+    grow(pieces, { done = false } = {}) {
+      const r = run;
+      if (!r || r.pieces !== pieces) return;
+      const synth = browserVoiceSupported();
+      for (let i = r.st.length; i < pieces.length; i++) r.st.push(pieceState(pieces[i], synth));
+      if (done) r.open = false;
+      pump(r);
+      // She was waiting past the last piece: go on with the new one, or end.
+      if (!r.waiting || r.index < 0) return;
+      if (r.index < r.st.length) play(r);
+      else if (!r.open) finish(r);
     },
 
     stop: halt,
@@ -489,13 +551,16 @@ export function createVoicePlayer() {
     // (None while the device says a piece: its voice can't be measured.)
     analyser: () => (run && run.index >= 0 && run.st[run.index]?.status === "synth" ? null : analyser),
 
-    // How much of the reply she has said, 0..1 (by characters; within a
-    // piece by its playback time, or the device voice's word boundaries).
-    progress() {
+    // How many characters of the reply's spoken text she has said (whole
+    // pieces with the space after each; within a piece by its playback
+    // time, or the device voice's word boundaries — up to one past the end
+    // once all of it is said). The caller relates it to that text's length,
+    // which may still be growing while the reply streams in.
+    said() {
       const r = run;
-      if (!r || !r.total) return lastProgress;
+      if (!r) return lastSaid;
       let now = 0;
-      if (r.index >= 0 && !r.waiting) {
+      if (r.index >= 0 && r.index < r.st.length && !r.waiting) {
         if (r.voice) now = r.voice.position();
         else if (r.st[r.index].status === "synth") now = r.from;
         else if (el && el.duration && isFinite(el.duration)) {
@@ -505,8 +570,8 @@ export function createVoicePlayer() {
       // Never backwards within a reply: the device voice's first word
       // boundary can land a little behind its time estimate, and after a
       // pause it starts again from the beginning of the word it reached.
-      lastProgress = Math.max(lastProgress, Math.min(1, (r.done + now) / r.total));
-      return lastProgress;
+      lastSaid = Math.max(lastSaid, r.done + now);
+      return lastSaid;
     },
 
     // The call ended: drop the element and its audio graph.

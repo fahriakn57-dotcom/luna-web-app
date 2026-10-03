@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchTTS } from "@/lib/api";
+import { fetchTTS, getReplyLang } from "@/lib/api";
 import { primeVoiceAudio, micDelayAfterSpeechMs, playTurnCue } from "@/lib/voiceAudio";
 import { createVoicePlayer } from "@/lib/voicePlayer";
+import { createVoiceFiller, preloadFillers } from "@/lib/voiceFiller";
 import { toSpoken } from "@/lib/spokenText";
-import { toSpeechPieces } from "@/lib/speechChunks";
+import { createSpeechCutter } from "@/lib/speechChunks";
 
 // Everything that makes the voice call a conversation rather than a
 // walkie-talkie. Luna.jsx owns the chat (sending messages); this hook owns
@@ -12,18 +13,29 @@ import { toSpeechPieces } from "@/lib/speechChunks";
 //     own (never while she is still audible — the mic would hear her); two
 //     silent turns in a row pause it until the next tap
 //   - your turn ends after a short silence, not at the first breath
-//   - her voice: the reply is synthesized and played piece by piece
-//     (lib/speechChunks.js, lib/voicePlayer.js), so she starts talking a few
-//     seconds after her answer arrives, on one audio element that iOS lets
+//   - her voice: the reply streams in (Luna.jsx -> onReplyStart,
+//     onReplyDelta, onReply) and is cut into pieces as it comes
+//     (lib/speechChunks.js); each is synthesized and played in order
+//     (lib/voicePlayer.js) — her first sentence goes to the voice before the
+//     rest of the reply is even written. One audio element that iOS lets
 //     play without a tap; a piece the server's voice can't make is said in
 //     the device's own voice (lib/browserVoice.js) instead of going silent
+//   - while her reply is slow to come, a short "hmm, bakalım" in her voice
+//     (lib/voiceFiller.js) — now and then, never over her reply or the mic
 //   - playback: live level for the visuals, resume after an outside pause,
 //     replay of the last reply, and the reply as text if her voice fails
 //   - phone behaviour: Android Back ends the call, lock-screen/headset
 //     controls, a short "moonset" before the screen closes
 
-const ENDPOINT_MS = 1200;        // silence that ends your turn
+const ENDPOINT_MS = 850;         // silence after a final phrase that ends your turn
 const CLOSE_ANIMATION_MS = 460;  // matches moonScene exit() / .call-exit
+// Her "hmm" (lib/voiceFiller.js): when nothing of her reply can be heard yet
+// this long after your turn went, she says one — on about 3 turns in 4, never
+// on two turns in a row. Her reply's first word waits for it to end, plus a
+// breath.
+const FILLER_DELAY_MS = 650;
+const FILLER_CHANCE = 0.75;
+const FILLER_GAP_MS = 120;
 const HANDS_FREE_KEY = "luna_call_handsfree";
 const TURNS_SEEN_KEY = "luna_call_turns_seen";
 const isAndroid = /Android/i.test(navigator.userAgent);
@@ -42,13 +54,29 @@ function newTurnId() {
   return `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
 }
 
+// A reply to be said in the call (msg: {id, text}; gen: the call it belongs
+// to). open: more of it is still streaming in. Its pieces are cut as its
+// text comes (lib/speechChunks.js); started: her voice has begun; cutOff:
+// you interrupted her while it was still streaming in.
+function newReply(msg, gen, turnId, open) {
+  return { msg, gen, turnId: turnId || newTurnId(), pieces: [], cutter: createSpeechCutter(), open, started: false, cutOff: false };
+}
+
+// The language she answers in (the reply language chosen in Settings, else
+// the interface's) — her fillers are in that one, when there are any.
+function replyLang(lang) {
+  return getReplyLang() || lang;
+}
+
 function setPlaybackState(value) {
   try {
     if (navigator.mediaSession) navigator.mediaSession.playbackState = value;
   } catch (_) {}
 }
 
-export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn }) {
+// fillerChance: the odds of her "hmm" on a turn — the app leaves it at
+// FILLER_CHANCE; only tests pin it (1: every turn that may have one, 0: never).
+export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn, fillerChance = FILLER_CHANCE }) {
   const [active, setActive] = useState(false);     // screen mounted
   const [closing, setClosing] = useState(false);   // moonset running
   const [handsFree, setHandsFree] = useState(() => {
@@ -72,11 +100,21 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
   const [sendingSoon, setSendingSoon] = useState(false); // your words are being finalized to send
   const [micCheck, setMicCheck] = useState("idle");      // "idle" | "retrying" | "failed" (see below)
   const [player] = useState(createVoicePlayer);          // her voice (lib/voicePlayer.js)
+  const [filler] = useState(createVoiceFiller);          // her "hmm" (lib/voiceFiller.js)
 
   const liveRef = useRef(false);
   const genRef = useRef(0);            // which call a reply belongs to (bumped on every open)
   const lastInterimRef = useRef("");   // words heard but not yet final, in case no final comes
-  const lastReplyRef = useRef(null);   // {msg, turnId, pieces: [{text, url}]} kept for "Tekrar dinle"
+  // The reply being said, kept for "Tekrar dinle": {msg, turnId, gen,
+  // pieces: [{text, url, synth}], cutter, open (still streaming in),
+  // started (her voice has begun)} — see newReply.
+  const lastReplyRef = useRef(null);
+  const streamRef = useRef(null);      // ...while it is still streaming in
+  // The turn on its way to Luna (sendTurn's signal): hanging up, or cutting
+  // her off while her reply still streams in, lets it go — a request left
+  // running would keep the turn "sending" (no mic, "thinking") until it ends.
+  const turnCtlRef = useRef(null);
+  const replyLenRef = useRef(0);       // its spoken length so far (captions' progress)
   // Your turn: finished phrases, the silence timer, "send at the next final",
   // and its id (from the server recognizer's first phrase, if it made one).
   const turnRef = useRef({ parts: [], timer: null, flushOnFinal: false, turnId: null });
@@ -84,10 +122,15 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
   const closeTimerRef = useRef(null);
   const silenceRef = useRef(0);
   const closeRef = useRef(() => {});
+  // Her "hmm": the timer that may start one for the turn just sent, and
+  // which turns of this call were sent / had one (never two in a row).
+  const fillerTimerRef = useRef(null);
+  const fillerTurnsRef = useRef({ sent: 0, lastWith: -2 });
+  const stateRef = useRef("idle"); // the screen's state (see `state`) as last rendered
 
   // Latest values for callbacks that run later (timers, media events).
   const latest = useRef({});
-  latest.current = { speech, sending, handsFree, autoPaused, lang, t, quotaMessage, sendTurn };
+  latest.current = { speech, sending, handsFree, autoPaused, lang, t, quotaMessage, sendTurn, voiceFailed, fillerChance };
 
   // ---------------------------------------------------------------- audio
   const clearMediaSession = useCallback(() => {
@@ -128,6 +171,26 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     setPlaybackState("none");
   }, [player]);
 
+  // You cut her off while the rest of her reply is still streaming in: the
+  // stream is let go (Luna.jsx then reports the turn as failed, which for a
+  // reply you cut off is no error — see onTurnFailed), so your next turn
+  // never waits for an answer you no longer want.
+  const cutOffStream = useCallback(() => {
+    if (!streamRef.current) return;
+    streamRef.current.cutOff = true;
+    turnCtlRef.current?.abort();
+  }, []);
+
+  // Her "hmm" stops at once (a short fade), and one about to start doesn't:
+  // you interrupted, hung up, left the page, the turn or her voice failed.
+  // (Not when her reply merely begins to stream in — it plays to its end,
+  // and her first piece waits for it: see speak().)
+  const stopFiller = useCallback(() => {
+    clearTimeout(fillerTimerRef.current);
+    fillerTimerRef.current = null;
+    filler.stop();
+  }, [filler]);
+
   const forgetLastReply = useCallback(() => {
     lastReplyRef.current?.pieces.forEach((p) => {
       if (p.url) URL.revokeObjectURL(p.url);
@@ -165,14 +228,15 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     }
   }, [cancelListenTimer]);
 
-  // Never while Luna is audible or about to be: the mic has no echo
-  // cancellation and would send her own words back as yours. Nor while your
-  // last words are still being transcribed (the fallback recognizer).
+  // Never while Luna is audible or about to be (her "hmm" included): the mic
+  // has no echo cancellation and would send her own words back as yours. Nor
+  // while your last words are still being transcribed (the fallback
+  // recognizer).
   const canAutoListen = useCallback(() => {
     const { speech: sp, sending: busy, handsFree: hf, autoPaused: paused } = latest.current;
     return liveRef.current && hf && !paused && sp.supported && !sp.error && !sp.listening && !sp.transcribing
-      && !busy && !player.active() && document.visibilityState === "visible";
-  }, [player]);
+      && !busy && !player.active() && !filler.audible() && document.visibilityState === "visible";
+  }, [player, filler]);
 
   // Hands-free: reopen the mic after `delay` if nothing else is going on.
   // Until then the screen already shows "Mikrofon açılıyor" (handoff) rather
@@ -220,9 +284,14 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     setPlayingId(firstReady ? msg.id : null);
     setLoadingId(firstReady ? null : msg.id);
     let heard = false; // has any of it been audible yet
+    r.started = true;
     player.speak({
       pieces: r.pieces,
+      open: r.open, // still streaming in: more pieces follow (see addPieces)
       fetchPiece: (i, signal) => fetchTTS({ text: r.pieces[i].text, turnId: r.turnId, part: i, signal }),
+      // Her first piece never starts over her "hmm": it waits for its end,
+      // plus a breath (until then the screen still says "thinking").
+      before: () => filler.whenDone(FILLER_GAP_MS),
       // The device's voice, for a piece the server's couldn't make.
       lang: latest.current.lang === "tr" ? "tr-TR" : "en-US",
       onPieceReady: (i) => {
@@ -246,15 +315,24 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
         setPausedId(msg.id);
         setPlaybackState("paused");
       },
-      // Only after her LAST piece does the mic reopen.
+      // Only after her LAST piece does the mic reopen. (If that was the
+      // moment her reply completed, its turn is still finishing — Luna.jsx
+      // clears `sending` right after: hands-free goes on a moment later.)
       onDone: () => {
         setPlayingId(null);
         setPausedId(null);
         silenceRef.current = 0;
         setPlaybackState("none");
-        listenNext(micDelayAfterSpeechMs(), { cue: true });
+        const go = () => listenNext(micDelayAfterSpeechMs(), { cue: true });
+        if (!latest.current.sending) {
+          go();
+          return;
+        }
+        cancelListenTimer();
+        listenTimerRef.current = setTimeout(go, 300);
       },
       onFailed: (_index, error) => {
+        stopFiller(); // (her answer is read out now)
         setLoadingId(null);
         setPlayingId(null);
         setPausedId(null);
@@ -266,43 +344,115 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
           : { id: msg.id, kind: "voice", message: qm(error) || tr("Sesim şu an gelmedi, cevabımı yazdım.", "My voice didn't come through, so here's my answer.") });
       },
     });
-  }, [player, cancelListenTimer, clearTurn, listenNext, showMediaSession]);
+  }, [player, filler, cancelListenTimer, clearTurn, listenNext, showMediaSession, stopFiller]);
 
   // Which call is open now — Luna.jsx reads it when a turn is sent and
   // hands it back with the reply, so a reply to an earlier call is ignored.
   const generation = useCallback(() => genRef.current, []);
 
-  // Luna.jsx calls this with each reply that arrives while the call is live.
-  // turnId: the turn it answers (its voice counts as that turn).
-  const onReply = useCallback((msg, gen, turnId) => {
+  // Her reply as the captions and the readout show it (it grows while it
+  // streams in). spoken: its spoken text, when already at hand.
+  const showReply = useCallback((id, text, spoken = toSpoken(text)) => {
+    setReply({ id, text });
+    replyLenRef.current = spoken.length;
+  }, []);
+
+  // More of a reply's pieces were cut (done: and that was the last of them).
+  // Her voice starts with the first; later ones join the reply being said —
+  // unless it isn't any more (interrupted, her voice failed): then they are
+  // only kept for "Tekrar dinle".
+  const addPieces = useCallback((r, texts, done) => {
+    texts.forEach((text) => r.pieces.push({ text, url: null }));
+    if (done) r.open = false;
+    if (r.started) player.grow(r.pieces, { done });
+    else if (r.pieces.length) speak(r);
+  }, [player, speak]);
+
+  // Luna.jsx: her reply to a turn spoken in this call has begun to stream
+  // in — onReplyDelta brings it bit by bit, onReply whole at the end.
+  const onReplyStart = useCallback((gen, turnId) => {
     if (!liveRef.current || gen !== genRef.current) return;
     stopSpeaking();     // a newer reply replaces anything still being said
     forgetLastReply();  // "Tekrar dinle" must always belong to this reply
-    setReply({ id: msg.id, text: msg.text });
+    const r = newReply({ id: `l-call-${Date.now()}`, text: "" }, gen, turnId, true);
+    streamRef.current = r;
+    lastReplyRef.current = r;
     setVoiceFailed(null);
+    showReply(r.msg.id, "", "");
+  }, [stopSpeaking, forgetLastReply, showReply]);
+
+  // Luna.jsx: the next bit of the reply that is streaming in. Her voice
+  // starts as soon as its first piece can be cut (lib/speechChunks.js).
+  const onReplyDelta = useCallback((text, gen) => {
+    const r = streamRef.current;
+    if (!liveRef.current || !r || r.gen !== gen || gen !== genRef.current || !text) return;
+    r.msg = { ...r.msg, text: r.msg.text + text };
+    const spoken = toSpoken(r.msg.text);
+    showReply(r.msg.id, r.msg.text, spoken);
+    addPieces(r, r.cutter.update(spoken, false), false);
+  }, [showReply, addPieces]);
+
+  // Luna.jsx calls this with each reply that arrives while the call is live.
+  // turnId: the turn it answers (its voice counts as that turn). The reply
+  // that streamed in is finished from its final text (a difference from the
+  // streamed bits is reconciled — a word already cut is never said again);
+  // one that came whole is cut and said from its start.
+  const onReply = useCallback((msg, gen, turnId) => {
+    if (!liveRef.current || gen !== genRef.current) return;
+    let r = streamRef.current;
+    streamRef.current = null;
+    if (!r || r.gen !== gen || (turnId && r.turnId !== turnId)) {
+      stopSpeaking();
+      forgetLastReply();
+      setVoiceFailed(null);
+      r = newReply(msg, gen, turnId, true);
+      lastReplyRef.current = r;
+    }
+    r.msg = { ...msg, id: r.msg.id };
+    const spoken = toSpoken(msg.text);
+    showReply(r.msg.id, msg.text, spoken);
     // (No falling back to the raw text when nothing speakable is left — a
     // reply of only a link or an emoji: the server strips the same things
     // and refuses the empty rest, so it would end as "Sesim şu an gelmedi".)
-    const texts = toSpeechPieces(toSpoken(msg.text));
-    if (!texts.length) {
-      // Nothing to say: hands-free carries on — once this turn has finished
-      // sending (Luna.jsx clears `sending` right after this returns). The
-      // screen says "Mikrofon açılıyor" meanwhile, not idle for a moment.
-      cancelListenTimer();
-      const { handsFree: hf, autoPaused: paused } = latest.current;
-      if (hf && !paused) setHandoff(true);
-      listenTimerRef.current = setTimeout(() => listenNext(0), 300);
+    const texts = r.cutter.update(spoken, true);
+    if (r.started || texts.length) {
+      addPieces(r, texts, true);
       return;
     }
-    const r = { msg, turnId: turnId || newTurnId(), pieces: texts.map((text) => ({ text, url: null })) };
-    lastReplyRef.current = r;
-    speak(r);
-  }, [stopSpeaking, forgetLastReply, speak, listenNext, cancelListenTimer]);
+    // Nothing to say: hands-free carries on — once this turn has finished
+    // sending (Luna.jsx clears `sending` right after this returns). The
+    // screen says "Mikrofon açılıyor" meanwhile, not idle for a moment.
+    // (A "hmm" still sounding stops: no answer follows it — and the mic
+    // then waits for its tail to leave the speaker, as after her voice.)
+    r.open = false;
+    const afterFiller = filler.audible();
+    stopFiller();
+    cancelListenTimer();
+    const { handsFree: hf, autoPaused: paused } = latest.current;
+    if (hf && !paused) setHandoff(true);
+    listenTimerRef.current = setTimeout(() => listenNext(afterFiller ? micDelayAfterSpeechMs() : 0), 300);
+  }, [stopSpeaking, forgetLastReply, showReply, addPieces, listenNext, cancelListenTimer, stopFiller, filler]);
 
   // Luna.jsx calls this when a turn sent from the call failed (network, a
-  // usage limit). Returns true when the call showed it (no toast needed).
+  // usage limit) — also when her reply broke off while streaming in: what
+  // she said of it stops and is dropped (it was no whole answer). Returns
+  // true when the call showed it (no toast needed).
   const onTurnFailed = useCallback((error, gen) => {
     if (!liveRef.current || gen !== genRef.current) return false;
+    stopFiller();
+    const broken = streamRef.current;
+    const brokeOff = !!broken;
+    if (brokeOff) {
+      streamRef.current = null;
+      stopSpeaking();
+      forgetLastReply();
+      setReply(null);
+      replyLenRef.current = 0;
+      // You had cut her off and are talking already (or the mic is about to
+      // open for you): that answer was given up anyway. No error, and your
+      // new turn goes on.
+      if (broken.cutOff) return true;
+    }
     cancelListenTimer();
     clearTurn();
     setAutoPaused(true); // no hands-free loop on errors: wait for a tap
@@ -310,10 +460,45 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     setVoiceFailed({
       id: null,
       kind: "turn",
-      message: qm(error) || tr("Mesajın gitmedi, bağlantını kontrol edip tekrar dene.", "Your message didn't go through. Check your connection and try again."),
+      message: qm(error) || (brokeOff
+        ? tr("Bağlantı koptu, cevabım yarıda kaldı. Tekrar sorar mısın?", "The connection dropped and my answer broke off. Could you ask again?")
+        : tr("Mesajın gitmedi, bağlantını kontrol edip tekrar dene.", "Your message didn't go through. Check your connection and try again.")),
     });
     return true;
-  }, [cancelListenTimer, clearTurn]);
+  }, [cancelListenTimer, clearTurn, stopSpeaking, forgetLastReply, stopFiller]);
+
+  // Your turn `turnId` was just sent: if FILLER_DELAY_MS later nothing of her
+  // reply can be heard yet — no piece of it arrived, she isn't saying
+  // anything, nothing failed, the screen still says "thinking" — she says a
+  // "hmm" meanwhile (on about 3 turns in 4, never on two turns in a row).
+  // A quick reply never gets one.
+  const scheduleFiller = useCallback((turnId) => {
+    clearTimeout(fillerTimerRef.current);
+    const gen = genRef.current;
+    const turns = fillerTurnsRef.current;
+    turns.sent += 1;
+    const turnNo = turns.sent;
+    fillerTimerRef.current = setTimeout(() => {
+      fillerTimerRef.current = null;
+      const { speech: sp, voiceFailed: failed, lang: uiLang, fillerChance: odds } = latest.current;
+      if (!liveRef.current || gen !== genRef.current || document.visibilityState !== "visible") return;
+      if (stateRef.current !== "thinking" || failed || sp.listening) return;
+      // (Her voice only ever begins with a piece that arrived.)
+      const r = lastReplyRef.current;
+      if (r && r.turnId === turnId && r.pieces.some((p) => p.url || p.synth)) return;
+      if (turns.lastWith === turnNo - 1 || Math.random() >= odds) return;
+      const lang = replyLang(uiLang);
+      if (!filler.ready(lang)) {
+        preloadFillers(lang); // (for a later turn: the language changed, or the clips failed to load)
+        return;
+      }
+      // As when she speaks (see speak()): the fallback recognizer's mic,
+      // held between turns, is let go first — a held mic puts phones in
+      // their quieter call audio mode.
+      if (sp.engine === "recorder" && !sp.transcribing) sp.abort();
+      if (filler.play(lang)) turns.lastWith = turnNo;
+    }, FILLER_DELAY_MS);
+  }, [filler]);
 
   // ---------------------------------------------------------------- your turn
   const flushTurn = useCallback(() => {
@@ -344,8 +529,11 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
       try { localStorage.setItem(TURNS_SEEN_KEY, String(next)); } catch (_) {}
       return next;
     });
-    latest.current.sendTurn(text, { turnId });
-  }, []);
+    const ctl = new window.AbortController();
+    turnCtlRef.current = ctl;
+    latest.current.sendTurn(text, { turnId, signal: ctl.signal });
+    scheduleFiller(turnId);
+  }, [scheduleFiller]);
   const flushTurnRef = useRef(flushTurn);
   flushTurnRef.current = flushTurn;
 
@@ -482,6 +670,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
       if (!liveRef.current) return;
       if (document.visibilityState === "hidden") {
         cancelListenTimer();
+        stopFiller(); // (her reply itself goes on, see above)
         if (latest.current.speech.listening) latest.current.speech.abort();
         clearTurn();
       } else {
@@ -490,15 +679,19 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [active, listenNext, cancelListenTimer, clearTurn]);
+  }, [active, listenNext, cancelListenTimer, clearTurn, stopFiller]);
 
   // ---------------------------------------------------------------- open / close
   const teardown = useCallback(() => {
     if (!liveRef.current) return;
     liveRef.current = false;
+    streamRef.current = null;
+    turnCtlRef.current?.abort(); // a turn still on its way is let go
+    turnCtlRef.current = null;
     cancelListenTimer();
     clearTurn();
     latest.current.speech.abort();
+    stopFiller();
     stopSpeaking();
     forgetLastReply();
     player.release(); // the element and its audio graph go with the call
@@ -510,7 +703,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
       setActive(false);
       setClosing(false);
     }, prefersReducedMotion() ? 0 : CLOSE_ANIMATION_MS);
-  }, [player, stopSpeaking, cancelListenTimer, clearTurn, forgetLastReply, clearMediaSession]);
+  }, [player, stopSpeaking, cancelListenTimer, clearTurn, forgetLastReply, clearMediaSession, stopFiller]);
 
   // Every way out goes through history, so Android Back and the on-screen
   // buttons share one path and no stray history entry is left behind.
@@ -537,12 +730,16 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     const { speech: sp, handsFree: hf } = latest.current;
     primeVoiceAudio(); // inside the tap: lets audio (and its visuals) run…
     player.unlock();   // …and her voice play later without a tap (iOS)
+    preloadFillers(replyLang(latest.current.lang)); // her "hmm"s, ready before the first turn
     clearTimeout(closeTimerRef.current);
     if (sp.listening) sp.abort(); // the chat mic, if it was on
     sp.clearError();
     liveRef.current = true;
     genRef.current += 1;
+    streamRef.current = null;
     silenceRef.current = 0;
+    stopFiller();
+    fillerTurnsRef.current = { sent: 0, lastWith: -2 };
     setMicCheck("idle");
     clearTurn();
     setReply(null);
@@ -562,15 +759,16 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     if (hf && sp.supported && !latest.current.sending) {
       setTimeout(() => { if (liveRef.current) startListening(); }, 0);
     }
-  }, [player, startListening, clearTurn]);
+  }, [player, startListening, clearTurn, stopFiller]);
 
   useEffect(() => () => {
     clearTimeout(closeTimerRef.current);
     clearTimeout(listenTimerRef.current);
     clearTimeout(turnRef.current.timer);
+    stopFiller();
     player.release();
     forgetLastReply();
-  }, [player, forgetLastReply]);
+  }, [player, forgetLastReply, stopFiller]);
 
   // ---------------------------------------------------------------- controls
   // A "not-allowed" we're still quietly retrying is not an error yet.
@@ -579,13 +777,16 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     if (!speech.supported) return "error";
     if (speech.error && !speech.listening && !micRetrying) return "error";
     if (speech.listening || handoff || micRetrying) return "listening";
-    // (finalizing alone — "Durdur" with nothing heard — is not "thinking")
-    if (sending || sendingSoon || speech.transcribing || (loadingId && loadingId === reply?.id)) return "thinking";
+    // (Before "thinking": she starts talking while the rest of her reply is
+    // still streaming in — the turn is still `sending` then.)
     if (pausedId) return "paused";
     if (playingId) return "speaking";
+    // (finalizing alone — "Durdur" with nothing heard — is not "thinking")
+    if (sending || sendingSoon || speech.transcribing || (loadingId && loadingId === reply?.id)) return "thinking";
     if (voiceFailed) return "readout";
     return "idle";
   })();
+  stateRef.current = state;
 
   // Her reply arrived and only her voice is still loading (see mainAction).
   const canSkipVoice = state === "thinking" && !sending && !!loadingId && loadingId === reply?.id;
@@ -600,11 +801,13 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
       // as text right away instead of waiting (a slow or stuck voice must
       // never trap the call in "thinking").
       if (canSkipVoice) {
+        stopFiller();
         stopSpeaking();
         setVoiceFailed({ id: reply.id, kind: "skipped", message: latest.current.t("Sesimi beklemeden cevabımı yazdım.", "Here's my answer without waiting for my voice.") });
       }
       return;
     }
+    stopFiller();
     if (state === "listening") {
       if (!sp.listening) {
         // The mic was only about to reopen: don't — wait for a tap.
@@ -636,6 +839,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
       // she finishes, so the mic doesn't catch the tail of her voice still in
       // the output (Bluetooth speakers lag noticeably).
       stopSpeaking();
+      cutOffStream();
       cancelListenTimer();
       setHandoff(true);
       listenTimerRef.current = setTimeout(() => {
@@ -645,15 +849,17 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
       return;
     }
     startListening();
-  }, [state, canSkipVoice, reply, player, stopSpeaking, flushTurn, finishTurn, startListening, cancelListenTimer]);
+  }, [state, canSkipVoice, reply, player, stopSpeaking, stopFiller, cutOffStream, flushTurn, finishTurn, startListening, cancelListenTimer]);
 
   // Paused: talk instead of resuming.
   const talkInstead = useCallback(() => {
     primeVoiceAudio();
+    stopFiller();
     stopSpeaking();
+    cutOffStream();
     setAutoPaused(false);
     startListening();
-  }, [stopSpeaking, startListening]);
+  }, [stopSpeaking, stopFiller, startListening, cutOffStream]);
 
   const replay = useCallback(() => {
     primeVoiceAudio();
@@ -675,8 +881,12 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     }
   }, [state, startListening]);
 
-  // For the captions: how much of the reply she has said (0..1, all pieces).
-  const speechProgress = useCallback(() => player.progress(), [player]);
+  // For the captions: how much of the reply she has said (0..1 of its text
+  // so far — it may still be growing).
+  const speechProgress = useCallback(() => {
+    const total = replyLenRef.current;
+    return total ? Math.min(1, player.said() / total) : 0;
+  }, [player]);
 
   return {
     active,
@@ -685,6 +895,8 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn 
     generation,
     open,
     close,
+    onReplyStart,
+    onReplyDelta,
     onReply,
     onTurnFailed,
     handleFinal,

@@ -32,6 +32,20 @@ export function primeVoiceAudio() {
   }
 }
 
+// The shared context itself (null until primeVoiceAudio made one), for
+// sounds played straight through it — her "hmm" while a reply is on its
+// way (lib/voiceFiller.js).
+export function voiceContext() {
+  return ctx;
+}
+
+// Whether a sound played straight through the context is heard for sure —
+// not on iOS, where the ring/silent switch mutes it (see above): a "hmm"
+// nobody hears would only hold her answer back.
+export function contextAlwaysAudible() {
+  return !IOS;
+}
+
 // The element's analyser — attached on the first call that finds the
 // context running, the same one after that. null: the element plays the
 // normal way.

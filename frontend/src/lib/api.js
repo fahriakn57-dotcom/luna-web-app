@@ -228,25 +228,221 @@ export function setReplyLang(code) {
   } catch {}
 }
 
-// mood: the mood the user picked TODAY in Ruh Halim ("great" | "good" |
-// "neutral" | "tired" | "bad"), or null — Luna takes it into account.
-export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null }) {
+// The body of a chat turn (/api/chat and /api/chat/stream). mood: the mood
+// the user picked TODAY in Ruh Halim ("great" | "good" | "neutral" | "tired"
+// | "bad"), or null — Luna takes it into account. voice: this turn is spoken
+// in the call — the backend asks for a short, speakable reply (no markdown,
+// lists or emoji). language: the reply language travels with every message
+// (it used to be a separate POST /api/profile before each one — a quarter
+// second per turn); an explicit reply-language choice wins over the
+// interface language.
+function chatBody({ message, mode, lang, conversationId, voice, mood }) {
+  return {
+    text: message,
+    mode: mode === "work" ? "work" : "friend",
+    conversation_id: conversationId || null,
+    voice: !!voice,
+    language: getReplyLang() || lang,
+    ...(mood ? { mood } : {}),
+  };
+}
+
+// idempotencyKey: sent as X-Idempotency-Key — a turn asked again under the
+// same key is answered once (a repeat gets that answer replayed, or 409
+// while it is still being written). See streamVoiceChat. signal: cancels it
+// (the voice call was hung up).
+export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null, idempotencyKey = null, signal = null }) {
   const headers = await authHeaders();
-  // Language is a per-account profile setting server-side, not per-message —
-  // set it lazily so a language change takes effect on the next turn. An
-  // explicit reply-language choice wins over the interface language (this
-  // used to reset it to TR/EN on every message).
-  await axios.post(`${API}/profile`, { language: getReplyLang() || lang }, { headers }).catch(() => {});
+  if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
   const res = await axios.post(
     `${API}/chat`,
-    // voice: this turn is spoken in the call — the backend asks for a short,
-    // speakable reply (no markdown, lists or emoji).
-    { text: message, mode: mode === "work" ? "work" : "friend", conversation_id: conversationId || null, voice, ...(mood ? { mood } : {}) },
+    chatBody({ message, mode, lang, conversationId, voice, mood }),
     // A spoken turn must never leave the call waiting forever: replies take
     // 2-4 s, so 45 s means something is stuck (the call then says so).
-    { headers, ...(voice ? { timeout: 45000 } : {}) }
+    { headers, ...(signal ? { signal } : {}), ...(voice ? { timeout: 45000 } : {}) }
   );
   return res.data.reply;
+}
+
+// ---- A spoken turn, streamed ----
+// The voice call's reply as it is being written, so Luna can start talking
+// at her first sentence instead of after the whole reply: POST
+// /api/chat/stream answers with Server-Sent Events — "data: {json}" frames:
+// {"type":"assistant_delta","text"} (the next bit of the reply, zero or more
+// of them), then {"type":"assistant_completed","reply"} (all of it) or
+// {"type":"task_failed","status","detail"}.
+//
+// onDelta(text) gets each bit as it arrives; resolves with the whole reply.
+// Errors look like axios's where the callers read them (e.response.status,
+// .headers["retry-after"], .data.detail), so the quota and rate-limit
+// messages keep working. e.canFallBack: the stream never got going — a
+// network error, a server or proxy that can't stream (404/405/5xx), or it
+// closed without a word — so asking /api/chat instead (same idempotency
+// key) is safe. Gives up when no data arrives for STREAM_IDLE_MS — the call
+// is waiting in silence meanwhile, so a stalled stream is called off soon
+// (the server sends no keep-alives: this also bounds the wait for the first
+// bit of the reply, which normally comes within a few seconds).
+const STREAM_IDLE_MS = 15000;
+
+function httpLikeError(status, detail, { retryAfter = null, canFallBack = false } = {}) {
+  const e = new Error(`Request failed with status code ${status}`);
+  e.response = { status, headers: retryAfter ? { "retry-after": retryAfter } : {}, data: { detail } };
+  e.canFallBack = canFallBack;
+  return e;
+}
+
+// task_failed's status, or one from its error code (an older server sends
+// only that).
+function failedStatus(event) {
+  if (Number.isInteger(event.status)) return event.status;
+  return { quota_exceeded: 429, empty_message: 400, timeout: 504 }[event.error] || 500;
+}
+
+// A minimal Server-Sent Events reader: lines end with \r\n, \n or \r (a
+// \r at the very end of a chunk may be half of a \r\n — kept for the next
+// one), "data:" lines gather until a blank line ends the frame, comments
+// (":" keep-alives) and other fields are skipped.
+function sseReader(onData) {
+  let buf = "";
+  let data = [];
+  const line = (l) => {
+    if (l === "") {
+      if (data.length) onData(data.join("\n"));
+      data = [];
+      return;
+    }
+    if (l[0] === ":") return;
+    const colon = l.indexOf(":");
+    const field = colon < 0 ? l : l.slice(0, colon);
+    let value = colon < 0 ? "" : l.slice(colon + 1);
+    if (value[0] === " ") value = value.slice(1);
+    if (field === "data") data.push(value);
+  };
+  return (text, end = false) => {
+    buf += text;
+    let start = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const c = buf[i];
+      if (c !== "\n" && c !== "\r") continue;
+      if (c === "\r" && i === buf.length - 1 && !end) break;
+      line(buf.slice(start, i));
+      if (c === "\r" && buf[i + 1] === "\n") i += 1;
+      start = i + 1;
+    }
+    buf = buf.slice(start);
+    if (end) {
+      if (buf) line(buf);
+      buf = "";
+      line("");
+    }
+  };
+}
+
+export async function streamVoiceChat({ message, mode, lang, conversationId, mood = null, signal, onDelta, idempotencyKey = null }) {
+  const headers = { ...(await authHeaders()), "Content-Type": "application/json", Accept: "text/event-stream" };
+  if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
+  const ctl = new window.AbortController();
+  let idleTimer = null;
+  let timedOut = false;
+  const stillThere = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      ctl.abort();
+    }, STREAM_IDLE_MS);
+  };
+  const cancel = () => ctl.abort();
+  if (signal?.aborted) ctl.abort();
+  else signal?.addEventListener("abort", cancel);
+  stillThere();
+
+  let written = "";     // the reply so far, from its deltas
+  let deltas = 0;
+  let reply = null;     // the whole reply, once it is complete
+  let failure = null;
+  const read = sseReader((data) => {
+    if (reply !== null || failure) return;
+    let event;
+    try {
+      event = JSON.parse(data);
+    } catch (_) {
+      return; // not one of ours
+    }
+    if (event?.type === "assistant_delta" && typeof event.text === "string" && event.text) {
+      written += event.text;
+      deltas += 1;
+      try {
+        onDelta?.(event.text);
+      } catch (_) {} // (the caller's trouble must not lose the reply)
+    } else if (event?.type === "assistant_completed") {
+      reply = typeof event.reply === "string" ? event.reply : written;
+    } else if (event?.type === "task_failed") {
+      failure = httpLikeError(failedStatus(event), typeof event.detail === "string" ? event.detail : "");
+    }
+  });
+
+  // Why a stream ended without its reply: our own abort, a timeout, or the
+  // connection dropping (e: the network error, if any).
+  const brokenOff = (e) => {
+    if (signal?.aborted) return e || Object.assign(new Error("canceled"), { name: "AbortError" });
+    const err = timedOut ? Object.assign(new Error("timeout"), { name: "TimeoutError" }) : e || new Error("stream ended early");
+    // (Never after a timeout: the server may still be writing that reply.)
+    err.canFallBack = !timedOut && deltas === 0;
+    return err;
+  };
+
+  try {
+    let res;
+    try {
+      res = await fetch(`${API}/chat/stream`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(chatBody({ message, mode, lang, conversationId, voice: true, mood })),
+        signal: ctl.signal,
+      });
+    } catch (e) {
+      throw brokenOff(e);
+    }
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const body = await res.json();
+        detail = typeof body?.detail === "string" ? body.detail : "";
+      } catch (_) {}
+      throw httpLikeError(res.status, detail, {
+        retryAfter: res.headers.get("Retry-After"),
+        canFallBack: res.status === 404 || res.status === 405 || res.status >= 500,
+      });
+    }
+    const reader = res.body?.getReader?.();
+    try {
+      if (!reader) {
+        // No readable body here: the frames all at once, at the end.
+        read(await res.text(), true);
+      } else {
+        const decoder = new window.TextDecoder();
+        while (reply === null && !failure) {
+          const { value, done } = await reader.read();
+          if (done) {
+            read(decoder.decode(), true);
+            break;
+          }
+          stillThere();
+          read(decoder.decode(value, { stream: true }));
+        }
+        if (reply !== null || failure) reader.cancel().catch(() => {});
+      }
+    } catch (e) {
+      // (The reply may have been complete before the connection went.)
+      if (reply === null && !failure) throw brokenOff(e);
+    }
+    if (failure) throw failure;
+    if (reply === null) throw brokenOff(null);
+    return reply;
+  } finally {
+    clearTimeout(idleTimer);
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 // Sohbetler — named conversation threads within a mode (Arkadaş Modu and

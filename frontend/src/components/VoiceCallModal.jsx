@@ -23,19 +23,21 @@ function formatTime(sec) {
 // with the audio. progress() = how much of the reply she has said (0..1,
 // across all the pieces her voice comes in — lib/voicePlayer.js), spread
 // over the captions by their timing weight (sentence ends and commas take a
-// little longer).
+// little longer). The text may still be growing while she talks (her reply
+// streams in): the caption stays where she is instead of starting over.
 function SpokenCaption({ text, progress }) {
   const chunks = useMemo(() => toChunks(toSpoken(text)), [text]);
   const total = useMemo(() => chunks.reduce((n, c) => n + c.weight, 0), [chunks]);
-  const [pos, setPos] = useState(0);
+  const [pos, setPos] = useState(() => Math.min(total, (progress() + 0.02) * total));
 
   useEffect(() => {
-    setPos(0);
-    const id = setInterval(() => {
-      setPos(Math.min(total, (progress() + 0.02) * total));
-    }, 90);
+    // (Never back: as the text grows, the share she has said shrinks a little
+    // faster than the captions' weight grows.)
+    const tick = () => setPos((p) => Math.min(total, Math.max(p, (progress() + 0.02) * total)));
+    tick();
+    const id = setInterval(tick, 90);
     return () => clearInterval(id);
-  }, [text, total, progress]);
+  }, [total, progress]);
 
   let offset = 0;
   let index = 0;

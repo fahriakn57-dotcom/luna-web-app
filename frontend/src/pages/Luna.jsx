@@ -17,7 +17,7 @@ import { useReminderAlerts } from "@/hooks/useReminderAlerts";
 import { dayKey } from "@/lib/dates";
 import PanelSlot, { lazyPanel } from "@/components/panel/PanelSlot";
 import {
-  sendChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
+  sendChat, streamVoiceChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
   getReplyLang, setReplyLang,
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
 } from "@/lib/api";
@@ -60,6 +60,50 @@ const WELCOME_LINES = {
     en: (name) => `Welcome back${name ? `, ${name}` : ""}! 🌙 LunaWorks is ready — let's create an image, PDF, Excel, Word, whatever you need.`,
   },
 };
+
+// A turn spoken in the voice call. Her reply streams in, and the call
+// (hooks/useVoiceCall.js, reached through callRef) starts saying its first
+// sentence while the rest is still being written. If the stream never got
+// going — before any of the reply arrived: a network error, a server or
+// proxy that can't stream — the turn is asked once the normal way, under the
+// same idempotency key, so the server never answers it twice (a 409 means
+// the streamed request is still being answered: its reply is replayed once
+// it is done). After part of the reply arrived, a broken stream is a failed
+// turn (the caller's catch). gen: the call the turn belongs to; signal: the
+// call lets the turn go (hung up, or you cut her off mid-stream) — whatever
+// is on its way then stops.
+const FALLBACK_409_RETRIES = 6;
+const FALLBACK_409_WAIT_MS = 1500;
+
+async function sendSpokenTurn(args, callRef, gen, turnId, signal) {
+  const idempotencyKey = `voice-${turnId || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`}`;
+  let started = false;
+  try {
+    return await streamVoiceChat({
+      ...args,
+      idempotencyKey,
+      signal,
+      onDelta: (text) => {
+        if (!started) {
+          started = true;
+          callRef.current?.onReplyStart(gen, turnId);
+        }
+        callRef.current?.onReplyDelta(text, gen);
+      },
+    });
+  } catch (e) {
+    if (started || !e?.canFallBack || signal?.aborted) throw e;
+  }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await sendChat({ ...args, voice: true, idempotencyKey, signal });
+    } catch (e) {
+      if (signal?.aborted || e?.response?.status !== 409 || attempt >= FALLBACK_409_RETRIES) throw e;
+      await new Promise((resolve) => setTimeout(resolve, FALLBACK_409_WAIT_MS));
+      if (signal?.aborted) throw e;
+    }
+  }
+}
 
 function buildWelcomeMessage(mode, lang, name) {
   const key = mode === "work" ? "work" : "friend";
@@ -216,7 +260,7 @@ export default function Luna() {
     quotaMessage,
     speech,
     sending,
-    sendTurn: (text, opts) => handleSendRef.current(text, { voice: true, turnId: opts?.turnId }),
+    sendTurn: (text, opts) => handleSendRef.current(text, { voice: true, turnId: opts?.turnId, signal: opts?.signal }),
   });
   callRef.current = call;
 
@@ -277,7 +321,8 @@ export default function Luna() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paired, mode, conversationId]);
 
-  const handleSend = useCallback(async (text, { voice = false, turnId = null } = {}) => {
+  // voice: a turn spoken in the call (turnId, signal: see useVoiceCall).
+  const handleSend = useCallback(async (text, { voice = false, turnId = null, signal = null } = {}) => {
     const content = (typeof text === "string" ? text : input).trim();
     if (!content || sending) return;
     if (!voice) setInput("");
@@ -290,11 +335,14 @@ export default function Luna() {
     try {
       // A mood picked on an earlier day no longer applies.
       const todaysMood = mood && localStorage.getItem("luna_mood_day") === dayKey() ? mood : null;
-      const reply = await sendChat({ message: content, mode, lang, conversationId, voice, mood: todaysMood });
+      const args = { message: content, mode, lang, conversationId, mood: todaysMood };
+      // A spoken turn streams (she starts talking at her first sentence).
+      const reply = voice ? await sendSpokenTurn(args, callRef, callGen, turnId, signal) : await sendChat(args);
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode };
       setMessages((m) => [...m, lunaMsg]);
       // Chat text replies stay silent by default — Luna only speaks while
-      // the dedicated voice-call screen is open.
+      // the dedicated voice-call screen is open (there the whole reply
+      // finishes what streamed in, or is said from its start).
       if (voice && callRef.current?.isLive()) callRef.current.onReply(lunaMsg, callGen, turnId);
     } catch (e) {
       // Covers both a failed /api/chat call and a failed auth step inside
@@ -306,8 +354,10 @@ export default function Luna() {
       // `finally` below always clears `sending` so the input stays usable
       // for an immediate retry. The one exception is a usage limit (429),
       // whose curated message tells the user when they can continue.
-      // A turn spoken in the call is answered inside the call screen.
+      // A turn spoken in the call is answered inside the call screen — and
+      // one the call let go itself (hung up mid-answer) needs no message.
       if (voice && callRef.current?.isLive() && callRef.current.onTurnFailed(e, callGen)) return;
+      if (voice && signal?.aborted) return;
       toast.error(
         quotaMessage(e) || t(
           "🌙 Şu an sana cevap verirken küçük bir sorun yaşadım. Biraz sonra tekrar deneyelim.",
