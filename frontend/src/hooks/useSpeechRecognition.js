@@ -250,9 +250,11 @@ export function useSpeechRecognition({ lang, onResult, onEnd, autoRestart = fals
         else interimText += t;
       }
       if (finalText || interimText) sessionRef.current.heard = true;
+      // A final can arrive together with the start of the next phrase:
+      // keep that trailing interim visible (the call's endpoint waits longer
+      // while an interim is pending, so those words aren't cut off).
       setInterim(interimText);
       if (finalText) {
-        setInterim("");
         onResultRef.current && onResultRef.current(finalText.trim());
       }
     };

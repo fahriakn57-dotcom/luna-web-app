@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, X, FileText, Maximize2 } from "lucide-react";
 import lunaAvatar from "@/assets/luna-avatar.webp";
 
-export default function ChatMessage({ msg }) {
+// memo: a streaming reply updates the message list many times a second, but
+// only its own bubble gets a new msg object (lib/streamedTurn.js) — the
+// rest of the chat skips re-rendering.
+function ChatMessage({ msg }) {
   const isUser = msg.role === "user";
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
@@ -79,3 +82,5 @@ export default function ChatMessage({ msg }) {
     </div>
   );
 }
+
+export default memo(ChatMessage);

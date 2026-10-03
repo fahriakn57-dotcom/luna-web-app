@@ -9,6 +9,9 @@ import { GlyphTile, GlowIcon } from "@/components/icons/GlyphTile";
 const ACCEPTED_EXT = ["png", "jpg", "jpeg", "webp", "gif", "pdf", "txt", "csv", "docx", "xlsx", "pptx", "zip"];
 const ACCEPTED_ATTR = ".png,.jpg,.jpeg,.webp,.gif,.pdf,.txt,.csv,.docx,.xlsx,.pptx,.zip";
 const MAX_FILES = 10;
+// How close to the bottom still counts as "following the chat" (see the
+// scroll effect below).
+const NEAR_BOTTOM_PX = 80;
 
 const QUICK_CHIPS = [
   { tr: "Bana motive edici bir söz söyle", en: "Give me a motivational quote" },
@@ -86,6 +89,9 @@ export default function FriendPanel({
   // fresh chat, so the starter prompts show under it.
   const onlyWelcome = hasMessages && messages.every((m) => String(m.id).startsWith("welcome-"));
   const busy = sending || generatingImage || generatingDoc;
+  // Luna's reply is streaming into its own bubble (lib/streamedTurn.js):
+  // that bubble replaces the typing dots.
+  const streaming = Boolean(messages[messages.length - 1]?.streaming);
 
   useEffect(() => {
     if (!genMenuOpen) return;
@@ -199,8 +205,32 @@ export default function FriendPanel({
     }
     onSend();
   };
+
+  // The list follows new messages (and a streaming reply as it grows) only
+  // while you are at — or within NEAR_BOTTOM_PX of — its bottom: scrolled up
+  // to read something older, you stay put instead of being pulled down by
+  // every streamed bit. Your own new message, or a whole new transcript
+  // (another Sohbet, a mode switch), always goes to the bottom. pinnedRef is
+  // measured on scroll, i.e. before the list grew.
+  const pinnedRef = useRef(true);
+  const lastSeenRef = useRef({ first: null, last: null });
+  const handleListScroll = () => {
+    const el = listRef.current;
+    if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+  };
   useEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+    const el = listRef.current;
+    if (!el) return;
+    const first = messages[0]?.id ?? null;
+    const last = messages[messages.length - 1];
+    const seen = lastSeenRef.current;
+    const newTranscript = first !== seen.first;
+    const ownNewMessage = last?.role === "user" && last.id !== seen.last;
+    lastSeenRef.current = { first, last: last?.id ?? null };
+    if (pinnedRef.current || newTranscript || ownNewMessage) {
+      el.scrollTop = el.scrollHeight;
+      pinnedRef.current = true;
+    }
   }, [messages, sending]);
 
   return (
@@ -231,7 +261,10 @@ export default function FriendPanel({
         <div className="flex items-center gap-2 mt-2 mb-2">
           <span className={`w-2 h-2 rounded-full ${sending || listening ? "bg-purple-400 animate-pulse" : "bg-emerald-400"}`} />
           <span className="text-xs text-white/50">
-            {listening ? (interim || t("Dinliyorum...", "Listening...")) : sending ? t("Düşünüyorum...", "Thinking...") : t("Luna burada", "Luna is here")}
+            {listening ? (interim || t("Dinliyorum...", "Listening..."))
+              : streaming ? t("Yazıyor...", "Writing...")
+              : sending ? t("Düşünüyorum...", "Thinking...")
+              : t("Luna burada", "Luna is here")}
           </span>
         </div>
 
@@ -259,7 +292,8 @@ export default function FriendPanel({
             </div>
           )}
 
-          <div ref={listRef} data-testid="chat-message-list" className="relative flex-1 overflow-y-auto px-5 py-5 space-y-3 min-h-[220px]">
+          <div ref={listRef} data-testid="chat-message-list" onScroll={handleListScroll}
+            className="relative flex-1 overflow-y-auto px-5 py-5 space-y-3 min-h-[220px]">
             {!hasMessages && (
               <div className="min-h-full flex flex-col items-center justify-center text-center gap-4">
                 <IconTile name={workMode ? "work" : "friend"} size={56} />
@@ -294,7 +328,7 @@ export default function FriendPanel({
                 ))}
               </div>
             )}
-            {busy && (
+            {busy && !streaming && (
               <div className="flex justify-start">
                 <div className="rounded-2xl border border-purple-400/20 bg-[#140b28]/90 px-4 py-3">
                   {generatingImage ? (

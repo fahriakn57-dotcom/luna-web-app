@@ -27,12 +27,21 @@ import { createSpeechCutter } from "@/lib/speechChunks";
 //   - phone behaviour: Android Back ends the call, lock-screen/headset
 //     controls, a short "moonset" before the screen closes
 
-const ENDPOINT_MS = 850;         // silence after a final phrase that ends your turn
+// The silence that ends your turn. After a final phrase the recognizer has
+// already waited out a pause of its own (~0.4-0.8 s) before giving it, so
+// only a short one more; while words are still only half-recognised (an
+// interim), the longer one — you may just be catching your breath. (Launch
+// audit 2026-10-03: 850 ms after a final too meant ≈ 1.25-1.65 s of silence
+// before your turn went, on desktop and iOS.) The short one ends by asking
+// the recognizer for words it may still hold unshown (see armEndpoint), and
+// the turn goes ENDPOINT_MS after the final at the latest, as before.
+const ENDPOINT_AFTER_FINAL_MS = 550;
+const ENDPOINT_MS = 850;
 const CLOSE_ANIMATION_MS = 460;  // matches moonScene exit() / .call-exit
 // Her "hmm" (lib/voiceFiller.js): when nothing of her reply can be heard yet
 // this long after your turn went, she says one — on about 3 turns in 4, never
-// on two turns in a row. Her reply's first word waits for it to end, plus a
-// breath.
+// on two turns in a row. Once her reply's first piece is ready to play, a
+// "hmm" still sounding fades out, and her first word follows after a breath.
 const FILLER_DELAY_MS = 650;
 const FILLER_CHANCE = 0.75;
 const FILLER_GAP_MS = 120;
@@ -43,6 +52,22 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 
 function readNumber(key) {
   try { return Number(localStorage.getItem(key)) || 0; } catch (_) { return 0; }
+}
+
+// Your turn so far: its finished phrases, the silence timer (or, while its
+// last words are asked for, the latest it goes — see finishTurn), "send at
+// the next final", its id (from the server recognizer's first phrase, if it
+// made one), and held: it is ready to go but waits for the previous turn or
+// a transcription to finish (see flushTurn).
+function newTurn() {
+  return { parts: [], timer: null, flushOnFinal: false, turnId: null, held: false };
+}
+
+// Nothing sends the turn on its own any more: no silence timer, no hold.
+function unschedule(turn) {
+  clearTimeout(turn.timer);
+  turn.timer = null;
+  turn.held = false;
 }
 
 // One id per turn: the server counts the turn's speech recognition and every
@@ -115,9 +140,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   // running would keep the turn "sending" (no mic, "thinking") until it ends.
   const turnCtlRef = useRef(null);
   const replyLenRef = useRef(0);       // its spoken length so far (captions' progress)
-  // Your turn: finished phrases, the silence timer, "send at the next final",
-  // and its id (from the server recognizer's first phrase, if it made one).
-  const turnRef = useRef({ parts: [], timer: null, flushOnFinal: false, turnId: null });
+  const turnRef = useRef(newTurn());   // your turn (see newTurn)
   const listenTimerRef = useRef(null);
   const closeTimerRef = useRef(null);
   const silenceRef = useRef(0);
@@ -182,9 +205,10 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   }, []);
 
   // Her "hmm" stops at once (a short fade), and one about to start doesn't:
-  // you interrupted, hung up, left the page, the turn or her voice failed.
-  // (Not when her reply merely begins to stream in — it plays to its end,
-  // and her first piece waits for it: see speak().)
+  // you interrupted, hung up, left the page, the turn or her voice failed —
+  // or her reply's first piece is ready to play (see speak()). (Not when her
+  // reply merely begins to stream in: until that piece's audio is there, the
+  // "hmm" goes on.)
   const stopFiller = useCallback(() => {
     clearTimeout(fillerTimerRef.current);
     fillerTimerRef.current = null;
@@ -208,8 +232,8 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   }, []);
 
   const clearTurn = useCallback(() => {
-    clearTimeout(turnRef.current.timer);
-    turnRef.current = { parts: [], timer: null, flushOnFinal: false, turnId: null };
+    unschedule(turnRef.current);
+    turnRef.current = newTurn();
     lastInterimRef.current = "";
     setPendingText("");
     setSendingSoon(false);
@@ -289,13 +313,19 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
       pieces: r.pieces,
       open: r.open, // still streaming in: more pieces follow (see addPieces)
       fetchPiece: (i, signal) => fetchTTS({ text: r.pieces[i].text, turnId: r.turnId, part: i, signal }),
-      // Her first piece never starts over her "hmm": it waits for its end,
-      // plus a breath (until then the screen still says "thinking").
+      // Her first piece never starts over her "hmm": it waits until that is
+      // over, plus a breath (until then the screen still says "thinking").
       before: () => filler.whenDone(FILLER_GAP_MS),
       // The device's voice, for a piece the server's couldn't make.
       lang: latest.current.lang === "tr" ? "tr-TR" : "en-US",
       onPieceReady: (i) => {
-        if (i === 0 && lastReplyRef.current === r) setCanReplay(true);
+        if (i !== 0) return;
+        if (lastReplyRef.current === r) setCanReplay(true);
+        // Her answer can be heard now: a "hmm" still sounding fades out
+        // (~60 ms) instead of her first word waiting for its end — launch
+        // audit 2026-10-03 (a cached piece or an instant reply is there
+        // while the clip still has most of a second to go).
+        stopFiller();
       },
       onPlaying: () => {
         if (!heard) showMediaSession();
@@ -503,17 +533,19 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   // ---------------------------------------------------------------- your turn
   const flushTurn = useCallback(() => {
     const turn = turnRef.current;
-    clearTimeout(turn.timer);
+    unschedule(turn);
     const { sending: busy, speech: sp } = latest.current;
     if (busy || sp.transcribing) {
       // The previous turn is still on its way, or your last words are still
-      // being transcribed — send this one right after.
-      turn.timer = setTimeout(() => flushTurnRef.current(), busy ? 400 : 250);
+      // being transcribed — this one goes the moment that is over (the
+      // effect below; launch audit 2026-10-03: it was re-checked every
+      // 250-400 ms).
+      turn.held = true;
       return;
     }
     const text = turn.parts.join(" ").replace(/\s+/g, " ").trim();
     const turnId = turn.turnId || newTurnId();
-    turnRef.current = { parts: [], timer: null, flushOnFinal: false, turnId: null };
+    turnRef.current = newTurn();
     lastInterimRef.current = "";
     setPendingText("");
     setSendingSoon(false);
@@ -537,25 +569,49 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   const flushTurnRef = useRef(flushTurn);
   flushTurnRef.current = flushTurn;
 
+  // A held turn (see flushTurn) goes as soon as nothing holds it any more:
+  // Luna.jsx clears `sending` (the previous turn — e.g. a reply you cut off
+  // — is over), or the recognizer's transcription is in. (flushTurn checks
+  // again and holds it once more if something else still does.)
+  useEffect(() => {
+    if (turnRef.current.held && !sending && !speech.transcribing) flushTurnRef.current();
+  }, [sending, speech.transcribing]);
+
   // Ask the engine for its last words, then send them together with the
   // turn (handleFinal flushes; handleSpeechEnd covers "no final came").
-  const finishTurn = useCallback(() => {
+  // waitMs: the turn goes after that long even if the engine hasn't
+  // answered by then.
+  const finishTurn = useCallback((waitMs) => {
     const turn = turnRef.current;
-    clearTimeout(turn.timer);
+    unschedule(turn); // (a held turn waits for those words too)
     turn.flushOnFinal = true;
+    if (waitMs) turn.timer = setTimeout(() => flushTurnRef.current(), waitMs);
     setSendingSoon(true);
     setLastSent([turn.parts.join(" "), lastInterimRef.current].filter(Boolean).join(" "));
     latest.current.speech.stop();
   }, []);
 
-  // The silence timer: you stopped talking. If a phrase is still only
-  // half-recognised, finish it first instead of sending without it.
-  const armEndpoint = useCallback(() => {
-    clearTimeout(turnRef.current.timer);
-    turnRef.current.timer = setTimeout(() => {
-      if (latest.current.speech.interim) finishTurn();
+  // The silence timer: you stopped talking (ENDPOINT_AFTER_FINAL_MS after a
+  // final phrase, ENDPOINT_MS while words are still coming). If a phrase is
+  // still only half-recognised when it ends, finish it first instead of
+  // sending without it. After a final, finish it anyway: Chrome can hand
+  // over a final together with the first interim of your next words, and
+  // only the final reaches us (useSpeechRecognition renders the interim as
+  // ""), so the recognizer may still hold words we never saw — stop() makes
+  // it give them now, and they join this turn rather than starting one her
+  // reply would drop (review of launch audit 2026-10-03). Still ENDPOINT_MS
+  // after the final at the latest. Not while the turn would be held (see
+  // flushTurn): the mic stays open then, in case you go on. (You're talking
+  // again: a held turn waits for this timer instead.)
+  const armEndpoint = useCallback((afterFinal) => {
+    const turn = turnRef.current;
+    unschedule(turn);
+    turn.timer = setTimeout(() => {
+      const { speech: sp, sending: busy } = latest.current;
+      if (sp.interim) finishTurn();
+      else if (afterFinal && sp.listening && !busy && !sp.transcribing) finishTurn(ENDPOINT_MS - ENDPOINT_AFTER_FINAL_MS);
       else flushTurn();
-    }, ENDPOINT_MS);
+    }, afterFinal ? ENDPOINT_AFTER_FINAL_MS : ENDPOINT_MS);
   }, [flushTurn, finishTurn]);
 
   // From the speech hook: a finished phrase. Returns true when the call took
@@ -582,7 +638,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
     // A server-transcribed phrase whose recording is over has had its
     // silence already — send now.
     if (turn.flushOnFinal || (fromServer && !sp.listening)) flushTurn();
-    else armEndpoint();
+    else armEndpoint(true);
     return true;
   }, [flushTurn, armEndpoint, noteSilence]);
 
@@ -590,7 +646,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   useEffect(() => {
     if (!liveRef.current || !speech.interim) return;
     lastInterimRef.current = speech.interim;
-    if (turnRef.current.parts.length && !turnRef.current.flushOnFinal) armEndpoint();
+    if (turnRef.current.parts.length && !turnRef.current.flushOnFinal) armEndpoint(false);
   }, [speech.interim, armEndpoint]);
 
   // Your words are being transcribed on the server: the screen says
@@ -821,7 +877,7 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
         else flushTurn();
       } else {
         // "Durdur": nothing heard — stop and wait for a tap.
-        clearTimeout(turnRef.current.timer);
+        unschedule(turnRef.current);
         lastInterimRef.current = "";
         turnRef.current.flushOnFinal = true;
         sp.stop();

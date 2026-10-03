@@ -4,20 +4,22 @@
 // streamVoiceChat), and her first piece goes to the voice the moment it is
 // safe to cut, not after the whole reply.
 //
-// Why pieces: the server's TTS takes ≈ 1.6 s + 0.035 s per character
-// (measured: 31 characters 2.4-2.7 s, 100 characters 4.5-5.1 s), and
-// nothing is heard before a piece is done. Speech is ≈ 14 characters per
-// second, so synthesis runs about twice as fast as she talks: a short first
-// piece gets her talking soon, and each later piece is synthesized while the
-// ones before it play — it may be up to GROWTH × everything before it, up to
-// PIECE_MAX (a few bigger pieces: the server's voice allows only a few
-// requests a minute, shared by everyone).
+// Why pieces: the server's TTS is not streamed — nothing is heard before a
+// piece is done, and it takes ≈ 1.25 s + 0.015 s per character
+// (gemini-3.8-flash-lite-tts, launch audit 2026-10-03: p50 2.1 s for 27-102
+// characters). Speech is ≈ 14 characters per second, so synthesis runs far
+// faster than she talks: a short first piece gets her talking soon, and each
+// later piece is synthesized while the ones before it play — it may be up to
+// GROWTH × everything before it, up to PIECE_MAX (a few bigger pieces: the
+// server's voice allows only a few requests a minute, shared by everyone).
 //
 // The rules (lengths in characters of spoken text):
 // - Piece 0: the first complete sentence(s) reaching FIRST_MIN. A longer
 //   first sentence is cut after a , ; : or dash (else between words) so the
 //   piece is at most FIRST_MAX — as soon as that much of it is there; the
-//   sentence doesn't have to end first.
+//   sentence doesn't have to end first. (Launch audit 2026-10-03: 20..45,
+//   was 30..70 — every character of piece 0 is time before her first word,
+//   and the gemini-3.x voices say 16+ characters fine.)
 // - Later pieces: whole sentences, as many as fit the limit; a sentence
 //   longer than the limit is cut like a long first one.
 // - Never a tiny piece: Gemini's TTS refuses some very short texts outright
@@ -31,8 +33,8 @@
 //   start lowercase, so "3.5", "lunai.tr" and "16. yüzyıl" stay whole;
 //   pieces never end inside a word.
 
-const FIRST_MIN = 30;  // a shorter first sentence takes the next one along
-const FIRST_MAX = 70;  // ...and the first piece is cut before here
+const FIRST_MIN = 20;  // a shorter first sentence takes the next one along
+const FIRST_MAX = 45;  // ...and the first piece is cut before here
 const TAIL_MIN = 20;   // at least this much must follow a piece (see above)
 const PIECE_MIN = 80;
 const PIECE_MAX = 160;

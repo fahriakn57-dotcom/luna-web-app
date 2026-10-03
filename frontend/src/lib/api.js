@@ -299,7 +299,7 @@ function chatBody({ message, mode, lang, conversationId, voice, mood }) {
 
 // idempotencyKey: sent as X-Idempotency-Key — a turn asked again under the
 // same key is answered once (a repeat gets that answer replayed, or 409
-// while it is still being written). See streamVoiceChat. signal: cancels it
+// while it is still being written). See streamChat. signal: cancels it
 // (the voice call was hung up).
 // Which optional services work right now (GET /api/features, no account
 // needed) — e.g. email: false while verification/reset emails can't be sent.
@@ -333,9 +333,10 @@ export async function sendChat({ message, mode, lang, conversationId, voice = fa
   return res.data.reply;
 }
 
-// ---- A spoken turn, streamed ----
-// The voice call's reply as it is being written, so Luna can start talking
-// at her first sentence instead of after the whole reply: POST
+// ---- A turn, streamed ----
+// Luna's reply as it is being written: the voice call starts talking at her
+// first sentence, and a typed reply shows up word by word instead of after
+// the whole thing (launch audit 2026-10-03: 2-4 s of nothing). POST
 // /api/chat/stream answers with Server-Sent Events — "data: {json}" frames:
 // {"type":"assistant_delta","text"} (the next bit of the reply, zero or more
 // of them), then {"type":"assistant_completed","reply"} (all of it) or
@@ -347,11 +348,25 @@ export async function sendChat({ message, mode, lang, conversationId, voice = fa
 // messages keep working. e.canFallBack: the stream never got going — a
 // network error, a server or proxy that can't stream (404/405/5xx), or it
 // closed without a word — so asking /api/chat instead (same idempotency
-// key) is safe. Gives up when no data arrives for STREAM_IDLE_MS — the call
-// is waiting in silence meanwhile, so a stalled stream is called off soon
-// (the server sends no keep-alives: this also bounds the wait for the first
-// bit of the reply, which normally comes within a few seconds).
+// key) is safe. e.resumable: it broke off on this side — the connection
+// went, or nothing came for the idle time — not the server failing the
+// turn, so the server may still finish it and keep the reply under the
+// idempotency key (/api/chat with that key: the reply, or 409 while it is
+// still being written). e.reply: what the server kept for a turn that broke
+// off mid-reply — the caring reply of a flagged turn (onSafety called, show
+// it with the help card) or the calm "can't help with that" when Gemini's
+// safety filter stopped the reply — to show in place of the partial text.
+// Gives up when nothing arrives for the idle time:
+// - a spoken turn (voice): STREAM_IDLE_MS — the call is waiting in silence
+//   meanwhile, so a stalled stream is called off soon (no keep-alives there:
+//   this also bounds the wait for the first bit of the reply, which normally
+//   comes within a few seconds);
+// - a typed turn: TYPED_STREAM_IDLE_MS. It asks for stream: true, and the
+//   server then sends a ": keep-alive" comment every 10 s without news (a
+//   slow first token on a long, thoughtful reply is fine), so only a dead
+//   connection — or an older server without keep-alives — runs it out.
 const STREAM_IDLE_MS = 15000;
+const TYPED_STREAM_IDLE_MS = 45000;
 
 function httpLikeError(status, detail, { retryAfter = null, canFallBack = false } = {}) {
   const e = new Error(`Request failed with status code ${status}`);
@@ -407,9 +422,12 @@ function sseReader(onData) {
   };
 }
 
-export async function streamVoiceChat({ message, mode, lang, conversationId, mood = null, signal, onDelta, idempotencyKey = null, onSafety = null }) {
+// voice: a turn spoken in the call (short, speakable reply — see chatBody);
+// otherwise a typed turn. onSafety as in sendChat.
+export async function streamChat({ message, mode, lang, conversationId, voice = false, mood = null, signal = null, onDelta, idempotencyKey = null, onSafety = null }) {
   const headers = { ...(await authHeaders()), "Content-Type": "application/json", Accept: "text/event-stream" };
   if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
+  const idleMs = voice ? STREAM_IDLE_MS : TYPED_STREAM_IDLE_MS;
   const ctl = new window.AbortController();
   let idleTimer = null;
   let timedOut = false;
@@ -418,7 +436,7 @@ export async function streamVoiceChat({ message, mode, lang, conversationId, moo
     idleTimer = setTimeout(() => {
       timedOut = true;
       ctl.abort();
-    }, STREAM_IDLE_MS);
+    }, idleMs);
   };
   const cancel = () => ctl.abort();
   if (signal?.aborted) ctl.abort();
@@ -452,6 +470,12 @@ export async function streamVoiceChat({ message, mode, lang, conversationId, moo
       }
     } else if (event?.type === "task_failed") {
       failure = httpLikeError(failedStatus(event), typeof event.detail === "string" ? event.detail : "");
+      if (typeof event.reply === "string" && event.reply) failure.reply = event.reply;
+      if (event.safety) {
+        try {
+          onSafety?.(event.safety);
+        } catch (_) {}
+      }
     }
   });
 
@@ -462,6 +486,7 @@ export async function streamVoiceChat({ message, mode, lang, conversationId, moo
     const err = timedOut ? Object.assign(new Error("timeout"), { name: "TimeoutError" }) : e || new Error("stream ended early");
     // (Never after a timeout: the server may still be writing that reply.)
     err.canFallBack = !timedOut && deltas === 0;
+    err.resumable = true;
     return err;
   };
 
@@ -471,7 +496,12 @@ export async function streamVoiceChat({ message, mode, lang, conversationId, moo
       res = await fetch(`${API}/chat/stream`, {
         method: "POST",
         headers,
-        body: JSON.stringify(chatBody({ message, mode, lang, conversationId, voice: true, mood })),
+        // A spoken turn gets its deltas from voice: true alone (unchanged);
+        // a typed one asks for them (and the keep-alives) with stream: true.
+        body: JSON.stringify({
+          ...chatBody({ message, mode, lang, conversationId, voice, mood }),
+          ...(voice ? {} : { stream: true }),
+        }),
         signal: ctl.signal,
       });
     } catch (e) {
@@ -518,6 +548,11 @@ export async function streamVoiceChat({ message, mode, lang, conversationId, moo
     clearTimeout(idleTimer);
     signal?.removeEventListener("abort", cancel);
   }
+}
+
+// A turn spoken in the voice call, streamed (see streamChat).
+export function streamVoiceChat(args) {
+  return streamChat({ ...args, voice: true });
 }
 
 // Sohbetler — named conversation threads within a mode (Arkadaş Modu and

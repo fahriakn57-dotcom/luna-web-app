@@ -20,7 +20,8 @@ import { browserVoiceSupported, sayWithBrowser, unlockBrowserVoice } from "@/lib
 //    counts as speaking: no mic, no idle flash). A dropped connection or a
 //    gateway error is asked for once more (see worthRetrying). Her first
 //    piece also waits for a "hmm" she may be saying meanwhile
-//    (lib/voiceFiller.js) to finish — see held().
+//    (lib/voiceFiller.js) to be over — see held(); the call fades that out
+//    as soon as the piece is ready (onPieceReady, hooks/useVoiceCall.js).
 //
 // 3. A piece the server's voice can't make — its TTS is busy (503
 //    "tts_busy"), refuses the text (400), or still fails after the retry —

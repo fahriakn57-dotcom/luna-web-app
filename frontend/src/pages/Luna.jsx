@@ -16,8 +16,9 @@ import { useVoiceCall } from "@/hooks/useVoiceCall";
 import { useReminderAlerts } from "@/hooks/useReminderAlerts";
 import { dayKey } from "@/lib/dates";
 import PanelSlot, { lazyPanel } from "@/components/panel/PanelSlot";
+import { randomId, sendStreamedTurn, streamingReply } from "@/lib/streamedTurn";
 import {
-  sendChat, streamVoiceChat, sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
+  sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
   getReplyLang, setReplyLang,
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
 } from "@/lib/api";
@@ -61,48 +62,24 @@ const WELCOME_LINES = {
   },
 };
 
-// A turn spoken in the voice call. Her reply streams in, and the call
-// (hooks/useVoiceCall.js, reached through callRef) starts saying its first
-// sentence while the rest is still being written. If the stream never got
-// going — before any of the reply arrived: a network error, a server or
-// proxy that can't stream — the turn is asked once the normal way, under the
-// same idempotency key, so the server never answers it twice (a 409 means
-// the streamed request is still being answered: its reply is replayed once
-// it is done). After part of the reply arrived, a broken stream is a failed
-// turn (the caller's catch). gen: the call the turn belongs to; signal: the
-// call lets the turn go (hung up, or you cut her off mid-stream) — whatever
-// is on its way then stops.
-const FALLBACK_409_RETRIES = 6;
-const FALLBACK_409_WAIT_MS = 1500;
-
-async function sendSpokenTurn(args, callRef, gen, turnId, signal) {
-  const idempotencyKey = `voice-${turnId || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`}`;
+// A turn spoken in the voice call: the call (hooks/useVoiceCall.js, reached
+// through callRef) starts saying her first sentence while the rest is still
+// being written. gen: the call the turn belongs to; signal: the call lets
+// the turn go (hung up, or you cut her off mid-stream).
+function sendSpokenTurn(args, callRef, gen, turnId, signal) {
   let started = false;
-  try {
-    return await streamVoiceChat({
-      ...args,
-      idempotencyKey,
-      signal,
-      onDelta: (text) => {
-        if (!started) {
-          started = true;
-          callRef.current?.onReplyStart(gen, turnId);
-        }
-        callRef.current?.onReplyDelta(text, gen);
-      },
-    });
-  } catch (e) {
-    if (started || !e?.canFallBack || signal?.aborted) throw e;
-  }
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await sendChat({ ...args, voice: true, idempotencyKey, signal });
-    } catch (e) {
-      if (signal?.aborted || e?.response?.status !== 409 || attempt >= FALLBACK_409_RETRIES) throw e;
-      await new Promise((resolve) => setTimeout(resolve, FALLBACK_409_WAIT_MS));
-      if (signal?.aborted) throw e;
-    }
-  }
+  return sendStreamedTurn(args, {
+    voice: true,
+    idempotencyKey: `voice-${turnId || randomId()}`,
+    signal,
+    onDelta: (text) => {
+      if (!started) {
+        started = true;
+        callRef.current?.onReplyStart(gen, turnId);
+      }
+      callRef.current?.onReplyDelta(text, gen);
+    },
+  });
 }
 
 function buildWelcomeMessage(mode, lang, name) {
@@ -345,18 +322,26 @@ export default function Luna() {
     // Which call (if any) this turn belongs to — a reply is only spoken in
     // the same call it was asked in.
     const callGen = callRef.current?.generation();
+    // A typed turn's reply bubble, filled in as the reply streams.
+    const typed = voice ? null : streamingReply(setMessages, mode);
+    // The server flags a message about self-harm or abuse (backend
+    // services/safety.py): its reply then carries the help card.
+    let safety = null;
+    const onSafety = (s) => { safety = s; };
     try {
       // A mood picked on an earlier day no longer applies.
       const todaysMood = mood && localStorage.getItem("luna_mood_day") === dayKey() ? mood : null;
-      // The server flags a message about self-harm or abuse (backend
-      // services/safety.py): its reply then carries the help card.
-      let safety = null;
-      const onSafety = (s) => { safety = s; };
       const args = { message: content, mode, lang, conversationId, mood: todaysMood, onSafety };
-      // A spoken turn streams (she starts talking at her first sentence).
-      const reply = voice ? await sendSpokenTurn(args, callRef, callGen, turnId, signal) : await sendChat(args);
-      const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode, ...(safety ? { safety } : {}) };
-      setMessages((m) => [...m, lunaMsg]);
+      // Both stream: a spoken turn so she starts talking at her first
+      // sentence, a typed one so her reply shows up as it is written (and,
+      // if the connection breaks off mid-reply, is fetched whole: recover).
+      const reply = voice
+        ? await sendSpokenTurn(args, callRef, callGen, turnId, signal)
+        : await sendStreamedTurn(args, { voice: false, idempotencyKey: `text-${randomId()}`, onDelta: typed.onDelta,
+          recover: true });
+      const lunaMsg = { id: typed?.id || "l-" + Date.now(), role: "luna", text: reply, mode, ...(safety ? { safety } : {}) };
+      if (typed) typed.finish(lunaMsg);
+      else setMessages((m) => [...m, lunaMsg]);
       if (voice && safety) setCallSafety(safety);
       // Chat text replies stay silent by default — Luna only speaks while
       // the dedicated voice-call screen is open (there the whole reply
@@ -372,6 +357,24 @@ export default function Luna() {
       // `finally` below always clears `sending` so the input stays usable
       // for an immediate retry. The one exception is a usage limit (429),
       // whose curated message tells the user when they can continue.
+      // A flagged turn the server failed mid-reply (e.reply, see lib/api.js
+      // streamChat) was closed with the caring crisis reply: that and the
+      // help card take the partial text's place — never a "try again"
+      // toast (launch audit 2026-10-03). In the call it goes into the chat
+      // behind the call screen, and the card onto the call screen.
+      if (e?.reply) {
+        const kept = { id: typed?.id || "l-" + Date.now(), role: "luna", text: e.reply, mode, ...(safety ? { safety } : {}) };
+        if (typed) {
+          typed.finish(kept);
+          return;
+        }
+        setMessages((m) => [...m, kept]);
+        if (!callRef.current?.isLive()) return; // (the call is over: the reply and its card are in the chat)
+        if (safety && callRef.current.generation() === callGen) setCallSafety(safety);
+      }
+      // A typed reply that failed after part of it showed (and couldn't be
+      // fetched whole — see lib/streamedTurn.js) takes its partial text away.
+      typed?.drop();
       // A turn spoken in the call is answered inside the call screen — and
       // one the call let go itself (hung up mid-answer) needs no message.
       if (voice && callRef.current?.isLive() && callRef.current.onTurnFailed(e, callGen)) return;
