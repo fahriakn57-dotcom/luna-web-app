@@ -1,4 +1,6 @@
-import { attachAnalyser, isAudible, releaseAnalyser, resumeVoiceAudio } from "@/lib/voiceAudio";
+import {
+  attachAnalyser, createPcmStream, isAudible, releaseAnalyser, resumeVoiceAudio, streamingVoiceSupported, voiceContext,
+} from "@/lib/voiceAudio";
 import { browserVoiceSupported, sayWithBrowser, unlockBrowserVoice } from "@/lib/browserVoice";
 
 // Luna's voice in a call (driven by hooks/useVoiceCall.js). Two jobs:
@@ -32,6 +34,19 @@ import { browserVoiceSupported, sayWithBrowser, unlockBrowserVoice } from "@/lib
 //    call then reads the answer out with that message — and so does a device
 //    that can't speak; nothing after a missing piece is said (it would skip
 //    words).
+//
+// 4. Where her voice goes through the audio graph anyway (not iOS — see
+//    lib/voiceAudio.js) and a response can be read as it comes, a piece is
+//    streamed (speak()'s fetchStream): raw PCM played as the server makes it
+//    — her first word ~1 s sooner than a whole clip could arrive (launch
+//    audit 2026-10-03). It is there ("ready") with its first audio, and in
+//    flight until the rest has come; the whole clip then becomes its url (a
+//    WAV), which "Tekrar dinle" plays from the element. A clip the server
+//    had already (its cache) comes whole and plays from the element as
+//    usual. A stream that breaks before any of it was heard is a failed
+//    request like any other (see 2. and 3.); one that breaks while she says
+//    it ends her voice, as a broken clip does. A server without the
+//    streaming route: pieces are fetched whole from then on.
 //
 // The caller owns the reply's pieces ({text, url, synth}) and their blob
 // URLs — they are kept for "Tekrar dinle". The player fills in url as pieces
@@ -73,15 +88,12 @@ function speechError(code) {
   return e;
 }
 
-// 0.1 s of silence (16-bit PCM WAV) for unlock(), made once. A blob URL like
-// her voice itself, so it plays wherever her voice can.
-let silentUrl = null;
-function silentClip() {
-  if (silentUrl) return silentUrl;
-  const rate = 8000;
-  const bytes = rate * 0.1 * 2;
-  const buffer = new ArrayBuffer(44 + bytes); // the samples stay 0: silence
-  const v = new DataView(buffer);
+// A blob URL of 16-bit mono PCM (an ArrayBuffer of little-endian samples)
+// as a WAV clip.
+function wavUrl(pcm, rate) {
+  const bytes = pcm.byteLength;
+  const header = new ArrayBuffer(44);
+  const v = new DataView(header);
   const ascii = (at, s) => { for (let i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i)); };
   ascii(0, "RIFF");
   v.setUint32(4, 36 + bytes, true);
@@ -96,9 +108,22 @@ function silentClip() {
   v.setUint16(34, 16, true);        // bits per sample
   ascii(36, "data");
   v.setUint32(40, bytes, true);
-  silentUrl = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+  return URL.createObjectURL(new Blob([header, pcm], { type: "audio/wav" }));
+}
+
+// 0.1 s of silence (16-bit PCM WAV) for unlock(), made once. A blob URL like
+// her voice itself, so it plays wherever her voice can.
+let silentUrl = null;
+function silentClip() {
+  const rate = 8000;
+  if (!silentUrl) silentUrl = wavUrl(new ArrayBuffer((rate / 10) * 2), rate); // the samples stay 0: silence
   return silentUrl;
 }
+
+// How long a streamed piece will be, before all of it has come (for the
+// captions — see said()). Measured on the server's voice (2026-10-03): 41
+// characters 2.6-3.1 s, 127 characters 7.6-8.6 s.
+const clipSeconds = (text) => 0.2 + 0.065 * text.length;
 
 // A piece was said to its end: in the reply it is followed by a space (the
 // pieces joined by single spaces are the reply's spoken text — see
@@ -112,6 +137,7 @@ export function createVoicePlayer() {
   let analyser = null;
   let run = null; // the reply being spoken (see speak()); null when she is silent
   let lastSaid = 0; // held after a reply ends, so captions never jump back before they go
+  let streamRoute = true; // ...until the server says it has no streaming route (see 4.)
 
   // The run whose current piece the element is playing — media events of
   // anything else (the unlock blip, a piece that was switched away from, a
@@ -163,7 +189,7 @@ export function createVoicePlayer() {
   };
 
   // Stop the run for good: in-flight pieces are cancelled (whatever still
-  // arrives is revoked, see fetchPiece).
+  // arrives is revoked, see fetchPiece), a streamed one is silenced at once.
   const halt = () => {
     const r = run;
     if (!r) return;
@@ -172,6 +198,7 @@ export function createVoicePlayer() {
     r.st.forEach((s) => {
       if (s.ctl) s.ctl.abort();
       s.ctl = null;
+      if (s.pcm) s.pcm.stop();
     });
     if (el && !el.paused) {
       try { el.pause(); } catch (_) {}
@@ -192,14 +219,48 @@ export function createVoicePlayer() {
     r.on.onPaused?.();
   };
 
+  // A streamed piece plays straight through the context (into her analyser):
+  // its first scheduled sound is "playing", its last one ending is the end.
+  const startStream = (r, voice) => {
+    const index = r.index;
+    const mine = () => r === run && r.index === index && r.st[index].pcm === voice;
+    voice.play(analyser, {
+      onStart: () => {
+        if (!mine()) return;
+        r.paused = false;
+        r.on.onPlaying?.(index);
+      },
+      onEnd: () => {
+        if (!mine()) return;
+        pieceSaid(r, r.pieces[index].text);
+        next(r);
+      },
+      // pause(), or the system took the audio: as the element's "pause".
+      onPause: () => {
+        if (!mine()) return;
+        r.paused = true;
+        r.on.onPaused?.();
+      },
+      onError: (e) => {
+        if (mine()) fail(r, e);
+      },
+    });
+  };
+
   const start = (r) => {
     const index = r.index;
-    if (!isAudible(el)) {
+    const voice = r.st[index].pcm;
+    if (voice ? voiceContext()?.state !== "running" : !isAudible(el)) {
       resumeVoiceAudio().then((ok) => {
-        if (r !== run || r.index !== index) return;
+        // (A stream that broke meanwhile is being fetched again: it plays when it is there.)
+        if (r !== run || r.index !== index || r.waiting) return;
         if (ok) start(r);
         else block(r);
       });
+      return;
+    }
+    if (voice) {
+      startStream(r, voice);
       return;
     }
     let playing;
@@ -335,8 +396,9 @@ export function createVoicePlayer() {
     }
     r.waiting = false;
     const audio = element();
+    // (A streamed piece plays into this analyser too: one for all her voice.)
     analyser = attachAnalyser(audio);
-    audio.src = r.pieces[r.index].url;
+    if (!s.pcm) audio.src = r.pieces[r.index].url;
     if (r.paused) return; // paused between two pieces: resume() starts it
     start(r);
   };
@@ -365,6 +427,7 @@ export function createVoicePlayer() {
     tries: 0,
     ctl: null,
     error: null,
+    pcm: null, // streamed: its audio so far (lib/voiceAudio.js createPcmStream)
   });
 
   const pump = (r) => {
@@ -373,9 +436,53 @@ export function createVoicePlayer() {
     }
   };
 
+  // Piece i is there: it plays if she was waiting for it.
+  const ready = (r, i) => {
+    r.st[i].status = "ready";
+    r.on.onPieceReady?.(i);
+    if (r === run && r.waiting && r.index === i) play(r);
+    if (r === run) pump(r);
+  };
+
+  // Piece i didn't come: its request failed, or its stream broke before any
+  // of it was heard. Asked for once more (see worthRetrying), else said by
+  // the device — or her voice ends there.
+  const missed = (r, i, error, streamed) => {
+    const s = r.st[i];
+    if (streamed && error?.canFallBack) {
+      // No streaming route on this server: the piece is fetched whole, now
+      // and from now on (this try doesn't count).
+      streamRoute = false;
+      s.tries -= 1;
+      s.status = "idle";
+    } else if (s.tries < 2 && worthRetrying(error)) {
+      s.status = "idle";
+    } else if (deviceSays(error)) {
+      // The device says this piece; the ones after it keep coming.
+      s.status = "synth";
+      s.error = error;
+      r.pieces[i].synth = true;
+      r.on.onPieceReady?.(i);
+      if (r.waiting && r.index === i) play(r);
+    } else {
+      s.status = "failed";
+      s.error = error;
+      r.stopAt = Math.min(r.stopAt, i);
+      for (let j = i + 1; j < r.st.length; j++) {
+        if (r.st[j].ctl) r.st[j].ctl.abort();
+      }
+      if (r.waiting && r.index === i) {
+        fail(r, error);
+        return;
+      }
+    }
+    if (r === run) pump(r);
+  };
+
   const fetchPiece = (r, i) => {
     const s = r.st[i];
     const ctl = new window.AbortController();
+    const streamed = !!r.fetchStream && streamRoute && streamingVoiceSupported();
     let timedOut = false;
     let settled = false;
     const timer = setTimeout(() => {
@@ -386,11 +493,12 @@ export function createVoicePlayer() {
     s.tries += 1;
     s.ctl = ctl;
     r.inFlight += 1;
-    // Once per request: when it answers, or the moment it is cancelled or
-    // times out — a request still stuck before the network (the auth step)
-    // never sees its signal, and must not leave the call waiting forever.
-    // Returns whether the outcome is still wanted (not if the run was
-    // stopped or this request cancelled).
+    // Once per request: when it has answered in full (a streamed piece: all
+    // of it has come), or the moment it fails, is cancelled or times out — a
+    // request still stuck before the network (the auth step) never sees its
+    // signal, and must not leave the call waiting forever. Returns whether
+    // the outcome is still wanted (not if the run was stopped or this
+    // request cancelled).
     const settle = () => {
       if (settled) return false;
       settled = true;
@@ -400,47 +508,78 @@ export function createVoicePlayer() {
       return r === run && (!ctl.signal.aborted || timedOut);
     };
     const failed = (error) => {
-      if (!settle()) return;
-      if (s.tries < 2 && worthRetrying(error)) {
-        s.status = "idle";
-      } else if (deviceSays(error)) {
-        // The device says this piece; the ones after it keep coming.
-        s.status = "synth";
-        s.error = error;
-        r.pieces[i].synth = true;
-        r.on.onPieceReady?.(i);
-        if (r.waiting && r.index === i) play(r);
-      } else {
-        s.status = "failed";
-        s.error = error;
-        r.stopAt = Math.min(r.stopAt, i);
-        for (let j = i + 1; j < r.st.length; j++) {
-          if (r.st[j].ctl) r.st[j].ctl.abort();
-        }
-        if (r.waiting && r.index === i) {
-          fail(r, error);
-          return;
-        }
-      }
-      if (r === run) pump(r);
+      if (settle()) missed(r, i, error, streamed);
     };
     ctl.signal.addEventListener("abort", () => {
       const e = new Error(timedOut ? "timeout" : "canceled");
       e.name = timedOut ? "TimeoutError" : "AbortError";
       failed(e);
     });
-    Promise.resolve()
-      .then(() => r.fetchPiece(i, ctl.signal))
-      .then((url) => {
-        if (!settle()) {
-          URL.revokeObjectURL(url);
+    const arrived = (url) => {
+      if (!settle()) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      r.pieces[i].url = url;
+      ready(r, i);
+    };
+    // Streamed, its first audio is here: the piece is there and may play at
+    // once, while the rest keeps coming (no PIECE_TIMEOUT_MS any more — the
+    // stream has a stall timeout of its own, lib/api.js).
+    const streaming = ({ reader, rate }) => {
+      if (settled) {
+        reader.cancel?.();
+        return;
+      }
+      clearTimeout(timer);
+      const voice = createPcmStream(rate);
+      s.pcm = voice;
+      const broke = (error) => {
+        const heard = voice.started();
+        voice.stop();
+        if (s.pcm === voice) s.pcm = null;
+        if (!settle()) return;
+        if (heard) {
+          // She was saying it: her voice broke off, as with a broken clip.
+          s.status = "failed";
+          s.error = error;
+          fail(r, error);
           return;
         }
-        r.pieces[i].url = url;
-        s.status = "ready";
-        r.on.onPieceReady?.(i);
-        if (r === run && r.waiting && r.index === i) play(r);
-        if (r === run) pump(r);
+        if (r.index === i) r.waiting = true; // (it may have been about to start)
+        missed(r, i, error, true);
+      };
+      ready(r, i);
+      (async () => {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (settled) {
+            reader.cancel?.();
+            return false;
+          }
+          if (done) return true;
+          voice.push(value);
+        }
+      })().then((complete) => {
+        if (!complete) return;
+        // Its slot and its WAV first: if all of it has been heard already
+        // (the audio ran dry just before the body's end), end() goes on to
+        // the next piece — or ends the reply — right away.
+        if (settle()) {
+          // The whole clip, kept for "Tekrar dinle" (from the element).
+          r.pieces[i].url = wavUrl(voice.pcm16(), rate);
+          pump(r);
+        }
+        voice.end();
+      }, broke);
+    };
+    Promise.resolve()
+      .then(() => (streamed ? r.fetchStream(i, ctl.signal) : r.fetchPiece(i, ctl.signal)))
+      .then((got) => {
+        if (!streamed) arrived(got);
+        else if (got?.reader) streaming(got);
+        else if (got?.url) arrived(got.url);
+        else failed(new Error("tts stream: no audio"));
       }, failed);
   };
 
@@ -459,19 +598,22 @@ export function createVoicePlayer() {
 
     // Speak a reply: pieces [{text, url, synth}] (url set = already fetched,
     // synth = said by the device last time, e.g. "Tekrar dinle"),
-    // fetchPiece(index, signal) -> Promise<blob URL>, lang ("tr-TR" |
+    // fetchPiece(index, signal) -> Promise<blob URL>, fetchStream(index,
+    // signal) -> Promise<{reader, rate} | {url}> (lib/api.js fetchTTSStream;
+    // optional — used only where streaming works, see 4.), lang ("tr-TR" |
     // "en-US", for the device's voice), open (the reply is still streaming
     // in: more pieces come through grow()), before() -> a promise to wait
     // for before her first piece plays, or null (asked when that piece is
     // about to play), and the callbacks onPieceReady(i), onPlaying(i),
     // onPaused(), onDone(), onFailed(i, error). Replaces whatever was being
     // said.
-    speak({ pieces, fetchPiece, lang, open = false, before = null, ...on }) {
+    speak({ pieces, fetchPiece, fetchStream = null, lang, open = false, before = null, ...on }) {
       halt();
       const synth = browserVoiceSupported();
       const r = {
         pieces,
         fetchPiece,
+        fetchStream,
         before,
         gate: null,       // ...what her first piece is waiting for (see held())
         on,
@@ -520,6 +662,11 @@ export function createVoicePlayer() {
         hush(r, true);
         return;
       }
+      const voice = r.index >= 0 && !r.waiting ? r.st[r.index]?.pcm : null;
+      if (voice) {
+        voice.pause(); // its onPause reports it
+        return;
+      }
       if (!el) return;
       if (!el.paused) {
         el.pause(); // its "pause" event reports it
@@ -545,7 +692,7 @@ export function createVoicePlayer() {
         if (!r.voice) say(r); // from where it stopped
         return;
       }
-      if (el) start(r);
+      if (el || r.st[r.index].pcm) start(r); // (a streamed piece: from where it stopped)
     },
 
     active: () => !!run,
@@ -562,9 +709,13 @@ export function createVoicePlayer() {
       if (!r) return lastSaid;
       let now = 0;
       if (r.index >= 0 && r.index < r.st.length && !r.waiting) {
+        const s = r.st[r.index];
         if (r.voice) now = r.voice.position();
-        else if (r.st[r.index].status === "synth") now = r.from;
-        else if (el && el.duration && isFinite(el.duration)) {
+        else if (s.status === "synth") now = r.from;
+        else if (s.pcm) {
+          const { text } = r.pieces[r.index];
+          now = text.length * s.pcm.progress(clipSeconds(text)); // (the real length once all of it came)
+        } else if (el && el.duration && isFinite(el.duration)) {
           now = r.pieces[r.index].text.length * Math.min(1, el.currentTime / el.duration);
         }
       }

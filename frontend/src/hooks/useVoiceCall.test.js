@@ -13,7 +13,7 @@ import { createRoot } from "react-dom/client";
 // The app's "@/" alias is webpack's (craco.config.js), not Jest's: every
 // "@/lib/..." module the hook and its libs import is registered here — the
 // fakes, and the rest as the real files.
-jest.mock("@/lib/api", () => ({ fetchTTS: jest.fn(), getReplyLang: () => null }), { virtual: true });
+jest.mock("@/lib/api", () => ({ fetchTTS: jest.fn(), fetchTTSStream: jest.fn(), getReplyLang: () => null }), { virtual: true });
 jest.mock("@/lib/browserVoice", () => ({
   browserVoiceSupported: () => false, sayWithBrowser: jest.fn(), unlockBrowserVoice: () => {},
 }), { virtual: true });
@@ -48,6 +48,9 @@ jest.mock("@/lib/voiceAudio", () => {
     primeVoiceAudio: () => {}, micDelayAfterSpeechMs: () => 50, playTurnCue: () => Promise.resolve(),
     voiceContext: () => ctx, contextAlwaysAudible: () => true,
     attachAnalyser: () => null, isAudible: () => true, resumeVoiceAudio: () => Promise.resolve(true), releaseAnalyser: () => {},
+    // these hook tests drive the whole-clip path (the streamed one has its
+    // own tests in lib/voicePlayer.stream.test.js)
+    streamingVoiceSupported: () => false, createPcmStream: () => null,
     __log: log,
   };
 }, { virtual: true });

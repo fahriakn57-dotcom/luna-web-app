@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchTTS, getReplyLang } from "@/lib/api";
+import { fetchTTS, fetchTTSStream, getReplyLang } from "@/lib/api";
 import { primeVoiceAudio, micDelayAfterSpeechMs, playTurnCue } from "@/lib/voiceAudio";
 import { createVoicePlayer } from "@/lib/voicePlayer";
 import { createVoiceFiller, preloadFillers } from "@/lib/voiceFiller";
@@ -313,6 +313,10 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
       pieces: r.pieces,
       open: r.open, // still streaming in: more pieces follow (see addPieces)
       fetchPiece: (i, signal) => fetchTTS({ text: r.pieces[i].text, turnId: r.turnId, part: i, signal }),
+      // Streamed audio where it plays through Web Audio (voicePlayer decides;
+      // iOS and browsers without streaming fetch keep fetchPiece): her first
+      // sound ~0.6 s after the request instead of after the whole piece.
+      fetchStream: (i, signal) => fetchTTSStream({ text: r.pieces[i].text, turnId: r.turnId, part: i, signal }),
       // Her first piece never starts over her "hmm": it waits until that is
       // over, plus a breath (until then the screen still says "thinking").
       before: () => filler.whenDone(FILLER_GAP_MS),

@@ -740,6 +740,109 @@ export async function fetchTTS({ text, turnId, part = 0, signal } = {}) {
   return URL.createObjectURL(blob);
 }
 
+// A streamed piece whose audio stops coming for this long is broken: the
+// server makes it several times faster than she says it, so a gap this long
+// is a stuck stream, never a slow one — and the call must not wait on it.
+const TTS_STREAM_IDLE_MS = 8000;
+
+// fetchTTSStream's answer that isn't audio, shaped like the axios error
+// fetchTTS gets for the same answer (lib/voicePlayer.js reads its status,
+// Retry-After and JSON detail). canFallBack: a server without the streaming
+// route — fetchTTS can still get the piece.
+async function ttsStreamError(res) {
+  let data = "";
+  try {
+    data = await res.text();
+    data = JSON.parse(data);
+  } catch (_) {} // (not JSON: the text, as axios gives it)
+  const e = new Error(`Request failed with status code ${res.status}`);
+  const retryAfter = res.headers.get("Retry-After");
+  e.response = { status: res.status, headers: retryAfter ? { "retry-after": retryAfter } : {}, data };
+  e.canFallBack = res.status === 404 || res.status === 405;
+  return e;
+}
+
+// Luna's voice for (a piece of) a reply, streamed: POST /api/tts/stream with
+// fetchTTS's body and auth, and its errors (everything the server checks
+// happens before any audio). Resolves as soon as the server has the piece's
+// first audio, with { reader, rate }: reader.read() gives raw 16-bit
+// little-endian mono PCM at `rate` as it is made (lib/voiceAudio.js plays
+// it); its clean end is the whole clip, an error a broken one — also when no
+// audio came for TTS_STREAM_IDLE_MS (a TimeoutError). Or, when the server
+// had the whole clip already (its cache), with { url }: a blob URL of the MP3,
+// as fetchTTS's. `signal` cancels it, body included.
+export async function fetchTTSStream({ text, turnId, part = 0, signal } = {}) {
+  const headers = { ...(await authHeaders()), "Content-Type": "application/json" };
+  const body = { text, voice: "coral", ...(turnId ? { turn_id: turnId, part } : {}) }; // (as fetchTTS)
+  const ctl = new window.AbortController();
+  let idleTimer = null;
+  let timedOut = false;
+  const cancel = () => ctl.abort();
+  const over = () => {
+    clearTimeout(idleTimer);
+    signal?.removeEventListener("abort", cancel);
+  };
+  if (signal?.aborted) ctl.abort();
+  else signal?.addEventListener("abort", cancel);
+
+  let reader;
+  let type;
+  try {
+    const res = await fetch(`${API}/tts/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+    if (!res.ok) {
+      if (res.status === 401) sessionLost();
+      throw await ttsStreamError(res);
+    }
+    type = (res.headers.get("Content-Type") || "").toLowerCase();
+    if (type.startsWith("audio/mpeg")) {
+      const blob = new Blob([await res.arrayBuffer()], { type: "audio/mpeg" });
+      over();
+      return { url: URL.createObjectURL(blob) };
+    }
+    reader = type.startsWith("audio/l16") ? res.body?.getReader?.() : null;
+    if (!reader) throw Object.assign(new Error(`tts stream: unexpected answer (${type || "no type"})`), { canFallBack: true });
+  } catch (e) {
+    over();
+    ctl.abort(); // (a body nobody will read)
+    throw e;
+  }
+
+  const stillThere = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      ctl.abort();
+    }, TTS_STREAM_IDLE_MS);
+  };
+  stillThere();
+  return {
+    rate: Number(/rate=(\d+)/.exec(type)?.[1]) || 24000,
+    reader: {
+      async read() {
+        try {
+          const got = await reader.read();
+          if (got.done) over();
+          else stillThere();
+          return got;
+        } catch (e) {
+          over();
+          throw timedOut ? Object.assign(new Error("timeout"), { name: "TimeoutError" }) : e;
+        }
+      },
+      cancel() {
+        over();
+        ctl.abort();
+        return Promise.resolve().then(() => reader.cancel?.()).catch(() => {});
+      },
+    },
+  };
+}
+
 // Server-side speech recognition for one recorded utterance (the voice
 // call's fallback when the browser has no speech recognition of its own, or
 // it fails). Returns the text ("" when nothing was said). `turnId` as in
