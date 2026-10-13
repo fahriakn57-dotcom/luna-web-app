@@ -4,7 +4,9 @@ require("dotenv").config();
 
 // Check if we're in development/preview mode (not production build)
 // Craco sets NODE_ENV=development for start, NODE_ENV=production for build
-const isDevServer = process.env.NODE_ENV !== "production";
+// Visual edits are for the dev server only: under jest (NODE_ENV=test) its babel
+// plugin overflowed the stack on components/Markdown.jsx (2026-10-13).
+const isDevServer = process.env.NODE_ENV === "development";
 
 // Environment variable overrides
 const config = {

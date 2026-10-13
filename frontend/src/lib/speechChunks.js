@@ -6,12 +6,12 @@
 //
 // Why pieces: the server's TTS is not streamed — nothing is heard before a
 // piece is done, and it takes ≈ 1.25 s + 0.015 s per character
-// (gemini-3.8-flash-lite-tts, launch audit 2026-10-03: p50 2.1 s for 27-102
-// characters). Speech is ≈ 14 characters per second, so synthesis runs far
+// (launch audit 2026-10-03: p50 2.1 s for 27-102 characters). Speech is
+// ≈ 14 characters per second, so synthesis runs far
 // faster than she talks: a short first piece gets her talking soon, and each
 // later piece is synthesized while the ones before it play — it may be up to
 // GROWTH × everything before it, up to PIECE_MAX (a few bigger pieces: the
-// server's voice allows only a few requests a minute, shared by everyone).
+// server's voice has limited capacity, shared by everyone).
 //
 // The rules (lengths in characters of spoken text):
 // - Piece 0: the first complete sentence(s) reaching FIRST_MIN. A longer
@@ -19,10 +19,10 @@
 //   piece is at most FIRST_MAX — as soon as that much of it is there; the
 //   sentence doesn't have to end first. (Launch audit 2026-10-03: 20..45,
 //   was 30..70 — every character of piece 0 is time before her first word,
-//   and the gemini-3.x voices say 16+ characters fine.)
+//   and the server's voices say 16+ characters fine.)
 // - Later pieces: whole sentences, as many as fit the limit; a sentence
 //   longer than the limit is cut like a long first one.
-// - Never a tiny piece: Gemini's TTS refuses some very short texts outright
+// - Never a tiny piece: a TTS model may refuse some very short texts outright
 //   ("Merhaba!" -> 400, "Olur." -> no audio at all) while sentences of 16+
 //   characters were always fine. So while the reply is still coming, a piece
 //   is only cut once at least TAIL_MIN characters follow it; when the reply

@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 import { X, Trash2, Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { IconTile } from "@/components/icons/LunaIcon";
-import { fetchGeneratedImages, deleteGeneratedImage } from "@/lib/api";
+import { fetchGeneratedImagesPage, deleteGeneratedImage } from "@/lib/api";
+
+// Adds a page to the list, each picture once (a picture deleted meanwhile
+// shifts the server's pages).
+function mergeImages(have, more) {
+  const seen = new Set(have.map((im) => im.id));
+  return [...have, ...more.filter((im) => !seen.has(im.id))];
+}
 
 export default function ImageGalleryPanel({ lang, onClose }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
@@ -10,13 +17,34 @@ export default function ImageGalleryPanel({ lang, onClose }) {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  // The server pages the gallery (a few big pictures fill a page): the
+  // older ones come with "Daha fazla göster".
+  const [nextBefore, setNextBefore] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
-    fetchGeneratedImages()
-      .then(setImages)
+    fetchGeneratedImagesPage()
+      .then((page) => {
+        setImages(page.images);
+        setNextBefore(page.hasMore ? page.nextBefore : null);
+      })
       .catch(() => toast.error(t("Görseller yüklenemedi", "Couldn't load images")))
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadMore = async () => {
+    if (!nextBefore || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await fetchGeneratedImagesPage({ before: nextBefore });
+      setImages((have) => mergeImages(have, page.images));
+      setNextBefore(page.hasMore ? page.nextBefore : null);
+    } catch {
+      toast.error(t("Görseller yüklenemedi", "Couldn't load images"));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleDelete = async (img) => {
     setDeletingId(img.id);
@@ -64,18 +92,29 @@ export default function ImageGalleryPanel({ lang, onClose }) {
             </p>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-3 content-start">
-            {images.map((img) => (
-              <button key={img.id} onClick={() => setSelected(img)} data-testid="gallery-image-thumb"
-                className="group relative aspect-square rounded-xl overflow-hidden border border-white/10 hover:border-purple-400/50 transition-colors">
-                <img src={img.imageUrl} alt={img.prompt} className="w-full h-full object-cover" />
-                {img.prompt && (
-                  <div className="absolute inset-x-0 bottom-0 p-1.5 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                    <p className="text-[10px] text-white/90 line-clamp-2 text-left">{img.prompt}</p>
-                  </div>
-                )}
-              </button>
-            ))}
+          <div className="flex-1 overflow-y-auto">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 content-start">
+              {images.map((img) => (
+                <button key={img.id} onClick={() => setSelected(img)} data-testid="gallery-image-thumb"
+                  className="group relative aspect-square rounded-xl overflow-hidden border border-white/10 hover:border-purple-400/50 transition-colors">
+                  <img src={img.imageUrl} alt={img.prompt} className="w-full h-full object-cover" />
+                  {img.prompt && (
+                    <div className="absolute inset-x-0 bottom-0 p-1.5 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                      <p className="text-[10px] text-white/90 line-clamp-2 text-left">{img.prompt}</p>
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+            {nextBefore && (
+              <div className="flex justify-center pt-4 pb-1">
+                <button onClick={loadMore} disabled={loadingMore} data-testid="gallery-load-more-button"
+                  className="flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-full border border-purple-400/30 text-purple-200 hover:bg-purple-400/15 disabled:opacity-50">
+                  {loadingMore && <Loader2 size={13} className="animate-spin" />}
+                  {t("Daha fazla göster", "Show more")}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

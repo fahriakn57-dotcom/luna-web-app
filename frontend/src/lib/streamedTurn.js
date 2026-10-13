@@ -33,7 +33,9 @@ const FALLBACK_409 = {
 // itself, the key was let go and this asks it once more, like a retry.)
 // Otherwise, after part of the reply arrived, a broken stream is a failed
 // turn (the caller's catch). signal: the turn is let go — whatever is on its
-// way then stops.
+// way then stops. Resolves with what streamChat / sendChat resolve with:
+// the reply text, or with args.full the whole turn (lib/api.js turnResult:
+// reply, sources, attachments) — the same shape whichever way it came.
 export async function sendStreamedTurn(args, { voice, idempotencyKey, signal = null, onDelta, recover = false }) {
   let started = false;
   try {

@@ -314,7 +314,7 @@ export default function FriendPanel({
             )}
             {messages.map((m) => (
               <Fragment key={m.id}>
-                <ChatMessage msg={m} />
+                <ChatMessage msg={m} lang={lang} />
                 {m.safety && <CrisisCard kind={m.safety.kind} lang={lang} />}
               </Fragment>
             ))}

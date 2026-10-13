@@ -1,4 +1,5 @@
 import axios from "axios";
+import { normalizeSources } from "./links";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 if (!BACKEND_URL) {
@@ -49,10 +50,29 @@ async function getCredentials() {
   return registering;
 }
 
+// This client renders Markdown (components/Markdown.jsx): every API request
+// says so, so the server may answer with tables, headings, code blocks and
+// [title](url) links. A client that doesn't send it (an older web build, the
+// mobile app) gets plain text with "(site.com)" citations instead. Voice
+// turns are always plain on the server's side. Chat bodies also carry
+// render: "markdown" (chatBody below).
+export const RENDER_HEADER = "X-Luna-Render";
+export const RENDER_MODE = "markdown";
+
 async function authHeaders() {
   const { id, secret } = await getCredentials();
-  return { "X-Device-Id": id, "X-Device-Secret": secret };
+  return { "X-Device-Id": id, "X-Device-Secret": secret, [RENDER_HEADER]: RENDER_MODE };
 }
+
+// ...and the requests made without the device's auth (registration, login,
+// pairing, features): every axios call to this API gets the header too.
+axios.interceptors?.request?.use?.((config) => {
+  if (!config || !String(config.url || "").startsWith(API)) return config;
+  if (!config.headers) config.headers = {};
+  if (typeof config.headers.set === "function") config.headers.set(RENDER_HEADER, RENDER_MODE);
+  else config.headers[RENDER_HEADER] = RENDER_MODE;
+  return config;
+});
 
 // Redeems a 5-minute pairing code generated on the phone (Profil → Web'e
 // Bağla) and adopts that device's identity here, replacing whatever
@@ -249,7 +269,82 @@ function toWebMessage(m) {
     // A reply to a message the server flagged (backend services/safety.py):
     // the help card with the emergency numbers stays under it after a reload.
     safety: meta.safety ? { kind: meta.safety } : undefined,
+    // The web pages a searched reply cited (meta.web_sources; a researched
+    // deck keeps meta.sources): the "Kaynaklar" chips stay under it after a
+    // reload too.
+    sources: (() => {
+      const list = normalizeSources(Array.isArray(meta.web_sources) ? meta.web_sources : meta.sources);
+      return list.length ? list : undefined;
+    })(),
   };
+}
+
+// ---- What a turn gives back ----
+// The attachments of a reply (a picture or a file made in chat, or by the
+// code tool — backend services/chat_actions.py attachment contract: {type:
+// "image"|"file", message_id, mime_type, name, size_bytes, url:
+// "/api/messages/{id}/file", data_base64 (only up to 3 MB), source}),
+// cleaned for components/MessageExtras.jsx. dataUrl: the bytes inline, when
+// they came along; otherwise they are fetched with fetchMessageFile.
+export function normalizeAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const a of list) {
+    if (!a || typeof a !== "object") continue;
+    const mimeType = typeof a.mime_type === "string" && /^[\w.+-]+\/[\w.+-]+$/.test(a.mime_type)
+      ? a.mime_type : "application/octet-stream";
+    const type = a.type === "image" && mimeType.startsWith("image/") ? "image" : "file";
+    const messageId = typeof a.message_id === "string" || typeof a.message_id === "number" ? String(a.message_id) : "";
+    const dataBase64 = typeof a.data_base64 === "string" && a.data_base64 ? a.data_base64 : "";
+    if (!messageId && !dataBase64) continue; // nothing to show or fetch
+    const name = typeof a.name === "string" && a.name.trim() ? a.name.trim().slice(0, 160) : "luna-dosya";
+    out.push({
+      type,
+      messageId,
+      mimeType,
+      name,
+      sizeBytes: Number.isFinite(a.size_bytes) ? a.size_bytes : null,
+      dataUrl: dataBase64 ? `data:${mimeType};base64,${dataBase64}` : "",
+      source: typeof a.source === "string" ? a.source : "",
+    });
+  }
+  return out;
+}
+
+// /api/chat's JSON, the stream's assistant_completed, /chat/media's answer
+// (or, from an older caller or server, just the reply text) as one shape:
+// { reply, messageId, sources, attachments, safety, degraded }. A picture
+// action answered without `attachments` (an older server) still shows its
+// picture from image_base64. Shaping a result that already is one returns
+// it as it is (streamChat({ full }) hands one to callers that shape again).
+const TURN_RESULT = Symbol("luna.turnResult");
+
+function shaped(result) {
+  Object.defineProperty(result, TURN_RESULT, { value: true });
+  return result;
+}
+
+export function turnResult(data) {
+  if (data && data[TURN_RESULT]) return data;
+  if (typeof data === "string") {
+    return shaped({ reply: data, messageId: null, sources: [], attachments: [], safety: null, degraded: false });
+  }
+  const d = data && typeof data === "object" ? data : {};
+  let attachments = normalizeAttachments(d.attachments);
+  if (!attachments.length && typeof d.image_base64 === "string" && d.image_base64) {
+    attachments = normalizeAttachments([{
+      type: "image", message_id: d.message_id, mime_type: d.mime_type || "image/png",
+      data_base64: d.image_base64, name: "luna-gorsel",
+    }]);
+  }
+  return shaped({
+    reply: typeof d.reply === "string" ? d.reply : "",
+    messageId: d.message_id != null ? String(d.message_id) : null,
+    sources: normalizeSources(d.sources),
+    attachments,
+    safety: d.safety || null,
+    degraded: Boolean(d.degraded),
+  });
 }
 
 function toWebMemory(m) {
@@ -285,7 +380,8 @@ export function setReplyLang(code) {
 // lists or emoji). language: the reply language travels with every message
 // (it used to be a separate POST /api/profile before each one — a quarter
 // second per turn); an explicit reply-language choice wins over the
-// interface language.
+// interface language. render: this client shows Markdown (see RENDER_HEADER;
+// the server keeps a spoken turn plain regardless).
 function chatBody({ message, mode, lang, conversationId, voice, mood }) {
   return {
     text: message,
@@ -293,6 +389,7 @@ function chatBody({ message, mode, lang, conversationId, voice, mood }) {
     conversation_id: conversationId || null,
     voice: !!voice,
     language: getReplyLang() || lang,
+    render: RENDER_MODE,
     ...(mood ? { mood } : {}),
   };
 }
@@ -315,7 +412,9 @@ export async function fetchFeatures() {
 
 // onSafety(safety): called when the server flagged the message (self-harm
 // or abuse — backend services/safety.py), so the app can show the help card.
-export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null, idempotencyKey = null, signal = null, onSafety = null }) {
+// Resolves with the reply text; with full: true, with the whole turn
+// (turnResult: reply, sources, attachments, ...).
+export async function sendChat({ message, mode, lang, conversationId, voice = false, mood = null, idempotencyKey = null, signal = null, onSafety = null, full = false }) {
   const headers = await authHeaders();
   if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
   const res = await axios.post(
@@ -330,7 +429,7 @@ export async function sendChat({ message, mode, lang, conversationId, voice = fa
       onSafety?.(res.data.safety);
     } catch (_) {}
   }
-  return res.data.reply;
+  return full ? turnResult(res.data) : res.data.reply;
 }
 
 // ---- A turn, streamed ----
@@ -354,17 +453,20 @@ export async function sendChat({ message, mode, lang, conversationId, voice = fa
 // idempotency key (/api/chat with that key: the reply, or 409 while it is
 // still being written). e.reply: what the server kept for a turn that broke
 // off mid-reply — the caring reply of a flagged turn (onSafety called, show
-// it with the help card) or the calm "can't help with that" when Gemini's
+// it with the help card) or the calm "can't help with that" when the model's
 // safety filter stopped the reply — to show in place of the partial text.
-// Gives up when nothing arrives for the idle time:
+// Gives up when nothing at all arrives for the idle time — any bytes count
+// (a ": keep-alive" comment as much as a reply delta), and the server sends
+// such a comment every 5 s while it has nothing else to send (a web search
+// before the first word, a slow first token), so only a dead connection — or
+// an older server without keep-alives — runs it out:
 // - a spoken turn (voice): STREAM_IDLE_MS — the call is waiting in silence
-//   meanwhile, so a stalled stream is called off soon (no keep-alives there:
-//   this also bounds the wait for the first bit of the reply, which normally
-//   comes within a few seconds);
-// - a typed turn: TYPED_STREAM_IDLE_MS. It asks for stream: true, and the
-//   server then sends a ": keep-alive" comment every 10 s without news (a
-//   slow first token on a long, thoughtful reply is fine), so only a dead
-//   connection — or an older server without keep-alives — runs it out.
+//   meanwhile, so a stalled stream is called off soon;
+// - a typed turn: TYPED_STREAM_IDLE_MS. It also asks for stream: true (the
+//   deltas, and the keep-alives from an older server that only sent them
+//   when asked).
+// Resolves with the reply text; with full: true, with the whole turn
+// (turnResult: reply, sources, attachments, ...).
 const STREAM_IDLE_MS = 15000;
 const TYPED_STREAM_IDLE_MS = 45000;
 
@@ -424,7 +526,7 @@ function sseReader(onData) {
 
 // voice: a turn spoken in the call (short, speakable reply — see chatBody);
 // otherwise a typed turn. onSafety as in sendChat.
-export async function streamChat({ message, mode, lang, conversationId, voice = false, mood = null, signal = null, onDelta, idempotencyKey = null, onSafety = null }) {
+export async function streamChat({ message, mode, lang, conversationId, voice = false, mood = null, signal = null, onDelta, idempotencyKey = null, onSafety = null, full = false }) {
   const headers = { ...(await authHeaders()), "Content-Type": "application/json", Accept: "text/event-stream" };
   if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
   const idleMs = voice ? STREAM_IDLE_MS : TYPED_STREAM_IDLE_MS;
@@ -446,6 +548,7 @@ export async function streamChat({ message, mode, lang, conversationId, voice = 
   let written = "";     // the reply so far, from its deltas
   let deltas = 0;
   let reply = null;     // the whole reply, once it is complete
+  let completed = null; // ...and its assistant_completed event (sources, attachments)
   let failure = null;
   const read = sseReader((data) => {
     if (reply !== null || failure) return;
@@ -463,6 +566,7 @@ export async function streamChat({ message, mode, lang, conversationId, voice = 
       } catch (_) {} // (the caller's trouble must not lose the reply)
     } else if (event?.type === "assistant_completed") {
       reply = typeof event.reply === "string" ? event.reply : written;
+      completed = event;
       if (event.safety) {
         try {
           onSafety?.(event.safety);
@@ -507,6 +611,7 @@ export async function streamChat({ message, mode, lang, conversationId, voice = 
     } catch (e) {
       throw brokenOff(e);
     }
+    stillThere(); // (the answer's head counts as hearing from the server)
     if (!res.ok) {
       if (res.status === 401) sessionLost();
       let detail = "";
@@ -532,8 +637,11 @@ export async function streamChat({ message, mode, lang, conversationId, voice = 
             read(decoder.decode(), true);
             break;
           }
+          // Any bytes at all — a ": keep-alive" comment (which the reader
+          // skips) as much as a piece of the reply — mean the server is
+          // still there: the silence timer starts over.
           stillThere();
-          read(decoder.decode(value, { stream: true }));
+          if (value) read(decoder.decode(value, { stream: true }));
         }
         if (reply !== null || failure) reader.cancel().catch(() => {});
       }
@@ -543,7 +651,7 @@ export async function streamChat({ message, mode, lang, conversationId, voice = 
     }
     if (failure) throw failure;
     if (reply === null) throw brokenOff(null);
-    return reply;
+    return full ? turnResult({ ...(completed || {}), reply }) : reply;
   } finally {
     clearTimeout(idleTimer);
     signal?.removeEventListener("abort", cancel);
@@ -583,32 +691,63 @@ export async function deleteConversation(conversationId) {
 // through conversation_engine.handle_turn). `text` is an optional caption/
 // question alongside the file; the backend fills in a sensible default
 // ("bu görsele bak..." / "bu belgeyi özetle...") when omitted.
-export async function sendMedia(file, text, mode) {
+// Resolves with the reply text; with { full: true }, with the whole turn
+// (turnResult) — a photo + "bunu anime yap" answers with the transformed
+// picture in `attachments`.
+export async function sendMedia(file, text, mode, { full = false } = {}) {
   const headers = await authHeaders();
   const form = new FormData();
   form.append("text", text || "");
   form.append("mode", mode === "work" ? "work" : "friend");
   form.append("file", file);
   const res = await axios.post(`${API}/chat/media`, form, { headers });
-  return res.data.reply;
+  return full ? turnResult(res.data) : res.data.reply;
 }
 
 // Same idea as sendMedia, for up to 10 files in ONE turn (web only — the
 // mobile client still uses the single-file /chat/media above, so that route
 // is left untouched; see backend/luna/routers/media.py::chat_media_batch).
-export async function sendMediaBatch(files, text, mode) {
+export async function sendMediaBatch(files, text, mode, { full = false } = {}) {
   const headers = await authHeaders();
   const form = new FormData();
   form.append("text", text || "");
   form.append("mode", mode === "work" ? "work" : "friend");
   files.forEach((f) => form.append("files", f));
   const res = await axios.post(`${API}/chat/media-batch`, form, { headers });
-  return res.data.reply;
+  return full ? turnResult(res.data) : res.data.reply;
+}
+
+// Where the bytes of a picture / file one of Luna's messages carries are
+// (GET /api/messages/{id}/file — an attachment's url). Only ever this
+// API's own route: the device's auth headers never go anywhere else.
+export function messageFileUrl(messageId) {
+  const id = String(messageId || "");
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+  return `${API}/messages/${id}/file`;
+}
+
+// Those bytes, as a Blob (the attachment's data came without its base64:
+// over 3 MB, or a replayed answer). Errors look like axios's (e.response).
+export async function fetchMessageFile(messageId, { signal } = {}) {
+  const url = messageFileUrl(messageId);
+  if (!url) throw httpLikeError(404, "");
+  const headers = await authHeaders();
+  const res = await fetch(url, { headers, ...(signal ? { signal } : {}) });
+  if (!res.ok) {
+    if (res.status === 401) sessionLost();
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = typeof body?.detail === "string" ? body.detail : "";
+    } catch (_) {}
+    throw httpLikeError(res.status, detail);
+  }
+  return res.blob();
 }
 
 // Asks Luna to GENERATE a new image from a text prompt (LunaWorks Modu) —
 // distinct from sendMedia above, which sends an EXISTING file for Luna to
-// look at. Backend: routers/media.py::generate_image (Gemini image model).
+// look at. Backend: routers/media.py::generate_image (the image model).
 export async function generateImage(prompt, mode) {
   const headers = await authHeaders();
   const form = new FormData();
@@ -622,16 +761,29 @@ export async function generateImage(prompt, mode) {
 }
 
 // LunaWorks Modu's "Ürettiklerim: Görsel" gallery — every image this user
-// has had Luna draw (see generateImage above), newest first.
-export async function fetchGeneratedImages() {
+// has had Luna draw (see generateImage above, and pictures made in chat),
+// newest first. The server pages it (by count and by bytes — a few big
+// pictures fill a page): { images, hasMore, nextBefore }, and nextBefore
+// passed back as `before` fetches the next page.
+export async function fetchGeneratedImagesPage({ before = null } = {}) {
   const headers = await authHeaders();
-  const res = await axios.get(`${API}/media/generated-images`, { headers });
-  return (res.data.images || []).map((im) => ({
-    id: im.id,
-    prompt: im.prompt || "",
-    imageUrl: `data:${im.mime_type || "image/png"};base64,${im.image_base64}`,
-    createdAt: im.created_at,
-  }));
+  const res = await axios.get(`${API}/media/generated-images`, { headers, ...(before ? { params: { before } } : {}) });
+  const data = res.data || {};
+  return {
+    images: (data.images || []).map((im) => ({
+      id: im.id,
+      prompt: im.prompt || "",
+      imageUrl: `data:${im.mime_type || "image/png"};base64,${im.image_base64}`,
+      createdAt: im.created_at,
+    })),
+    hasMore: Boolean(data.has_more && data.next_before),
+    nextBefore: data.next_before || null,
+  };
+}
+
+// The gallery's first page only (unchanged, for older callers).
+export async function fetchGeneratedImages() {
+  return (await fetchGeneratedImagesPage()).images;
 }
 
 export async function deleteGeneratedImage(imageId) {

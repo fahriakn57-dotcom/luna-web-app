@@ -17,9 +17,10 @@ import { useReminderAlerts } from "@/hooks/useReminderAlerts";
 import { dayKey } from "@/lib/dates";
 import PanelSlot, { lazyPanel } from "@/components/panel/PanelSlot";
 import { randomId, sendStreamedTurn, streamingReply } from "@/lib/streamedTurn";
+import { serverDetail } from "@/lib/errorText";
 import {
   sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
-  getReplyLang, setReplyLang,
+  getReplyLang, setReplyLang, turnResult,
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
 } from "@/lib/api";
 
@@ -80,6 +81,16 @@ function sendSpokenTurn(args, callRef, gen, turnId, signal) {
       callRef.current?.onReplyDelta(text, gen);
     },
   });
+}
+
+// What a turn brought besides its text, for the reply bubble
+// (components/ChatMessage.jsx): the pictures / files made in chat and the
+// web pages a searched reply used. (lib/api.js turnResult shapes them.)
+function replyExtras(result) {
+  return {
+    ...(result.attachments.length ? { attachments: result.attachments } : {}),
+    ...(result.sources.length ? { sources: result.sources } : {}),
+  };
 }
 
 function buildWelcomeMessage(mode, lang, name) {
@@ -331,15 +342,20 @@ export default function Luna() {
     try {
       // A mood picked on an earlier day no longer applies.
       const todaysMood = mood && localStorage.getItem("luna_mood_day") === dayKey() ? mood : null;
-      const args = { message: content, mode, lang, conversationId, mood: todaysMood, onSafety };
+      // full: the whole turn comes back — a picture or file made in chat
+      // (attachments) and the pages a searched reply used (sources) too.
+      const args = { message: content, mode, lang, conversationId, mood: todaysMood, onSafety, full: true };
       // Both stream: a spoken turn so she starts talking at her first
       // sentence, a typed one so her reply shows up as it is written (and,
       // if the connection breaks off mid-reply, is fetched whole: recover).
-      const reply = voice
+      const result = turnResult(voice
         ? await sendSpokenTurn(args, callRef, callGen, turnId, signal)
         : await sendStreamedTurn(args, { voice: false, idempotencyKey: `text-${randomId()}`, onDelta: typed.onDelta,
-          recover: true });
-      const lunaMsg = { id: typed?.id || "l-" + Date.now(), role: "luna", text: reply, mode, ...(safety ? { safety } : {}) };
+          recover: true }));
+      const lunaMsg = {
+        id: typed?.id || "l-" + Date.now(), role: "luna", text: result.reply, mode,
+        ...(safety ? { safety } : {}), ...replyExtras(result),
+      };
       if (typed) typed.finish(lunaMsg);
       else setMessages((m) => [...m, lunaMsg]);
       if (voice && safety) setCallSafety(safety);
@@ -379,8 +395,17 @@ export default function Luna() {
       // one the call let go itself (hung up mid-answer) needs no message.
       if (voice && callRef.current?.isLive() && callRef.current.onTurnFailed(e, callGen)) return;
       if (voice && signal?.aborted) return;
+      // A typed message the server refused as too long (413) was never
+      // taken: it goes back into the composer (to shorten, or to send as a
+      // file) instead of staying in the chat as if it had been sent.
+      if (!voice && e?.response?.status === 413) {
+        setMessages((m) => m.filter((x) => x.id !== optimistic.id));
+        setInput((cur) => cur || content);
+      }
+      // The server's own reason when it gives one (too long, not allowed,
+      // a plan limit — lib/errorText.js), else the in-character message.
       toast.error(
-        quotaMessage(e) || t(
+        quotaMessage(e) || serverDetail(e) || t(
           "🌙 Şu an sana cevap verirken küçük bir sorun yaşadım. Biraz sonra tekrar deneyelim.",
           "🌙 I ran into a small problem answering you just now. Let's try again in a bit."
         ),
@@ -414,12 +439,17 @@ export default function Luna() {
     setMessages((m) => [...m, optimistic]);
     setSending(true);
     try {
-      const reply = await sendMedia(file, caption?.trim(), mode);
-      const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode };
+      // (a photo + "bunu anime yap" comes back with the new picture in
+      // attachments — shown right in the reply)
+      const result = turnResult(await sendMedia(file, caption?.trim(), mode, { full: true }));
+      const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: result.reply, mode, ...replyExtras(result) };
       setMessages((m) => [...m, lunaMsg]);
     } catch (e) {
       const status = e?.response?.status;
-      const msg = quotaMessage(e) || (status === 415
+      // The server's own text first: a 413 is the file ("Dosya çok büyük
+      // (max 15MB)"); a too-long caption is a 422 (code
+      // "caption_too_long") that says how to shorten it.
+      const msg = quotaMessage(e) || serverDetail(e) || (status === 415
         ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, zip olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, or zip).")
         : status === 413
         ? t("Dosya çok büyük.", "That file is too large.")
@@ -462,16 +492,16 @@ export default function Luna() {
     setMessages((m) => [...m, ...optimisticMsgs]);
     setSending(true);
     try {
-      const reply = await sendMediaBatch(files, trimmedCaption, mode);
-      const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, mode };
+      const result = turnResult(await sendMediaBatch(files, trimmedCaption, mode, { full: true }));
+      const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: result.reply, mode, ...replyExtras(result) };
       setMessages((m) => [...m, lunaMsg]);
     } catch (e) {
       const status = e?.response?.status;
-      const detail = e?.response?.data?.detail || "";
-      const msg = quotaMessage(e) || (status === 415
+      // The server's own text first: a 413 may be too many files ("En fazla
+      // 10 dosya ekleyebilirsin") or one too big; a too-long caption is a
+      // 422 that says how to shorten it.
+      const msg = quotaMessage(e) || serverDetail(e) || (status === 415
         ? t("Bu dosya türünü okuyamıyorum (png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, zip olmalı).", "I can't read this file type (must be png, jpg, webp, gif, pdf, txt, csv, docx, xlsx, pptx, or zip).")
-        : status === 413 && detail.includes("fazla")
-        ? t("En fazla 10 dosya birden gönderebilirsin.", "You can send at most 10 files at once.")
         : status === 413
         ? t("Dosyalardan biri çok büyük.", "One of the files is too large.")
         : t("🌙 Dosyaları işlerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem with those files. Could you try again?"));
@@ -504,9 +534,13 @@ export default function Luna() {
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, imageUrl, mode };
       setMessages((m) => [...m, lunaMsg]);
     } catch (e) {
-      const msg = quotaMessage(e)
+      // A picture refused under the content rules (422 "image_refused" with
+      // the reason and the strikes left; 502 from an older server) or
+      // picture making paused after repeated refusals (403) must say so —
+      // "tekrar dener misin?" there only leads into (or prolongs) the pause.
+      const msg = quotaMessage(e) || serverDetail(e, [403, 413, 422, 429, 502])
         || t("🌙 Görseli çizerken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem drawing that. Could you try again?");
-      toast.error(msg, { duration: 6000 });
+      toast.error(msg, { duration: 8000 });
     } finally {
       setGeneratingImage(false);
     }
@@ -533,7 +567,7 @@ export default function Luna() {
       const lunaMsg = { id: "l-" + Date.now(), role: "luna", text: reply, fileUrl, fileName, mode };
       setMessages((m) => [...m, lunaMsg]);
     } catch (e) {
-      toast.error(quotaMessage(e) || t("🌙 Oluştururken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem generating that. Could you try again?"), { duration: 6000 });
+      toast.error(quotaMessage(e) || serverDetail(e) || t("🌙 Oluştururken küçük bir sorun yaşadım. Tekrar dener misin?", "🌙 I ran into a small problem generating that. Could you try again?"), { duration: 6000 });
     } finally {
       setGeneratingDoc(false);
     }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { X, Trash2, Download, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { IconTile } from "@/components/icons/LunaIcon";
+import { serverDetail } from "@/lib/errorText";
 import {
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
   fetchGeneratedPdfs, fetchGeneratedExcels, fetchGeneratedWords, fetchGeneratedPpts, fetchGeneratedTableImages, fetchGeneratedCharts,
@@ -117,7 +118,8 @@ export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
       setRawData("");
       toast.success(result.reply);
     } catch (e) {
-      toast.error(t("Oluşturulamadı, tekrar dener misin?", "Couldn't generate that, try again?"));
+      // (the server's own reason when it gives one: too long, a plan limit...)
+      toast.error(serverDetail(e) || t("Oluşturulamadı, tekrar dener misin?", "Couldn't generate that, try again?"));
     } finally {
       setGenerating(false);
     }

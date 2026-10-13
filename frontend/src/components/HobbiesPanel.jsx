@@ -9,7 +9,10 @@ import {
   CATALOG, CATALOG_BY_CATEGORY, CATEGORIES, CATEGORY_BY_KEY, DEFAULT_HUE, MARKS, hobbyVisual, matchRange, searchCatalog,
 } from "@/components/hobbies/hobbyCatalog";
 
-const MAX_HOBBIES = 50;
+// The server keeps at most 20 interests (backend routers/profile.py
+// _LIST_CAPS): a longer list was cut there silently and hobbies 21+ were
+// gone the next time the panel opened.
+const MAX_HOBBIES = 20;
 const MAX_LENGTH = 40;
 const MAX_MATCHES = 6;
 const UNDO_TOAST_ID = "hobby-removed";
@@ -166,8 +169,16 @@ export default function HobbiesPanel({ lang, onClose }) {
       while (!sameList(wantedRef.current, savedRef.current)) {
         const target = wantedRef.current;
         try {
-          await updateProfile({ interests: target });
-          savedRef.current = target;
+          const res = await updateProfile({ interests: target });
+          // What the server actually kept (it caps the list): if that is
+          // not what was sent, the panel shows the server's list — unless a
+          // newer change is already waiting to be saved.
+          const kept = Array.isArray(res?.profile?.interests) ? sanitizeList(res.profile.interests) : target;
+          savedRef.current = kept;
+          if (!sameList(kept, target) && wantedRef.current === target) {
+            wantedRef.current = kept;
+            setHobbies(kept);
+          }
         } catch {
           wantedRef.current = savedRef.current;
           setHobbies(savedRef.current);
@@ -303,7 +314,7 @@ export default function HobbiesPanel({ lang, onClose }) {
   const canAdd = status === "ready" && typed.length > 0;
   const showCounter = query.length >= MAX_LENGTH - 10;
   const shownCategories = category === "all" ? CATEGORIES : CATEGORIES.filter((c) => c.key === category);
-  const nearLimit = hobbies.length >= MAX_HOBBIES - 10;
+  const nearLimit = hobbies.length >= MAX_HOBBIES - 5;
 
   return (
     <Panel onClose={onClose} size="xl" accent="fuchsia" labelledBy={titleId} testId="hobbies-panel">

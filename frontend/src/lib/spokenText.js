@@ -4,6 +4,20 @@
 
 const EMOJI = /[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}\u{FE0F}\u{200D}\u{20E3}]/gu;
 
+// Web citations are never read aloud: a searched reply's "([aa.com.tr](url))"
+// or "(aa.com.tr)" goes entirely, a link whose text is just an address goes
+// too, and bare URLs go — "a a nokta com nokta t r" is nobody's answer. A
+// domain counts as one only with a lowercase top-level domain from this
+// list, so "(Node.js)" or "(ASP.NET)" stay.
+const TLD = "(?:com|net|org|tr|gov|edu|info|biz|io|co|me|tv|ai|app|dev|news|eu|uk|de|fr|nl|it|es|ru|us|az|int|online|site|xyz)";
+const DOMAIN = `(?:[a-z0-9-]+\\.)+${TLD}(?:\\/[^\\s()]*)?`;
+// "(aa.com.tr)", "(aa.com.tr, ntv.com.tr)"
+const DOMAIN_CITATION = new RegExp(`\\(\\s*${DOMAIN}(?:\\s*[,;]\\s*${DOMAIN})*\\s*\\)`, "g");
+// a link's text that is only an address: "mgm.gov.tr", "https://..."
+const ADDRESS_TEXT = new RegExp(`^\\s*(?:https?:\\/\\/\\S+|(?:www\\.)?${DOMAIN})\\s*$`, "i");
+// "([aa.com.tr](url))", "([a](u), [b](v))" — the whole parenthesised citation
+const LINK_CITATION = /\(\s*(?:!?\[[^\]\n]{0,300}\]\([^)\s]{0,2000}\)[\s,;]*)+\)/g;
+
 // Only markdown SYNTAX goes — "5*3", "snake_case", "C#" and "2**10" stay as
 // written. Span patterns are length-capped (no runaway backtracking) and
 // avoid regex lookbehind (older iOS Safari can't parse it).
@@ -11,8 +25,15 @@ export function toSpoken(text) {
   return (text || "")
     .replace(/\r\n/g, "\n")
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/!?\[([^\]\n]{0,300})\]\([^)\s]{0,2000}\)/g, "$1")
+    .replace(LINK_CITATION, "")
+    .replace(/!?\[([^\]\n]{0,300})\]\([^)\s]{0,2000}\)/g, (_, label) => (ADDRESS_TEXT.test(label) ? "" : label))
+    // a link still being written at the end of a streaming reply
+    .replace(/!?\(?\[[^\]\n]{0,300}\]\([^)\s]{0,2000}$/, "")
+    .replace(/\(\s*(?:https?:\/\/|www\.)[^\s)]*\s*\)/g, "")
     .replace(/https?:\/\/\S+/g, "")
+    .replace(/(^|\s)www\.\S+/g, "$1")
+    .replace(DOMAIN_CITATION, "")
+    .replace(/\(\s*[,;]?\s*\)/g, "")
     .replace(/^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$/gm, "")
     .replace(/^[ \t]*\|(.*)\|[ \t]*$/gm, (_, cells) => cells.split("|").map((c) => c.trim()).join(", "))
     .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
