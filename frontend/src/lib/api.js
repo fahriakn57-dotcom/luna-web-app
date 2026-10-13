@@ -763,6 +763,17 @@ export async function deleteConversation(conversationId) {
   await axios.delete(`${API}/conversations/${conversationId}`, { headers });
 }
 
+// Rename and/or pin a chat (PATCH /api/conversations/{id}). Resolves with
+// the fields the server stored ({ id, title?, pinned? }).
+export async function updateConversation(conversationId, { title, pinned } = {}) {
+  const headers = await authHeaders();
+  const body = {};
+  if (typeof title === "string") body.title = title;
+  if (typeof pinned === "boolean") body.pinned = pinned;
+  const res = await axios.patch(`${API}/conversations/${conversationId}`, body, { headers });
+  return res.data;
+}
+
 // Sends an image (png/jpg/webp/gif) or document (pdf/txt) to Luna for real
 // vision/document understanding — same backend endpoint
 // (backend/luna/routers/media.py::chat_media) the mobile app already uses,
