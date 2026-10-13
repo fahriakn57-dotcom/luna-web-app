@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { transcribeAudio } from "@/lib/api";
 import { createMicRecorder, newTurnId, recorderAvailable } from "@/lib/recorderStt";
+import { speechLocale } from "@/lib/languages";
 
 // Speech recognition (TR/EN) behind one API, with two engines:
 //   "native"   the browser's Web Speech API (Chrome, Edge, Safari): live
@@ -239,7 +240,8 @@ export function useSpeechRecognition({ lang, onResult, onEnd, autoRestart = fals
     const rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
-    rec.lang = lang === "tr" ? "tr-TR" : "en-US";
+    // (the language you talk to Luna in — any of hers: "de" -> "de-DE")
+    rec.lang = speechLocale(lang);
 
     rec.onresult = (e) => {
       let finalText = "";

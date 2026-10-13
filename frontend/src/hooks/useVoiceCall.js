@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchTTS, fetchTTSStream, getReplyLang } from "@/lib/api";
-import { primeVoiceAudio, micDelayAfterSpeechMs, playTurnCue } from "@/lib/voiceAudio";
+import {
+  fetchTTS, fetchTTSStream, getReplyLang, fetchRealtimeStatus, startRealtimeVoice, sendRealtimeTranscript,
+  endRealtimeVoice, connectRealtimeVoice, runAgentToolCall,
+} from "@/lib/api";
+import { primeVoiceAudio, micDelayAfterSpeechMs, playTurnCue, voiceContext } from "@/lib/voiceAudio";
 import { createVoicePlayer } from "@/lib/voicePlayer";
-import { createVoiceFiller, preloadFillers } from "@/lib/voiceFiller";
+import { createVoiceFiller, preloadFillers, setFillerVoice } from "@/lib/voiceFiller";
 import { toSpoken } from "@/lib/spokenText";
 import { createSpeechCutter } from "@/lib/speechChunks";
+// (relative, no app alias: lib/realtimeCall.js has no app imports either)
+import { createRealtimeCall, realtimeSupported, requestMicrophone } from "../lib/realtimeCall";
 
 // Everything that makes the voice call a conversation rather than a
 // walkie-talkie. Luna.jsx owns the chat (sending messages); this hook owns
@@ -26,6 +31,12 @@ import { createSpeechCutter } from "@/lib/speechChunks";
 //     replay of the last reply, and the reply as text if her voice fails
 //   - phone behaviour: Android Back ends the call, lock-screen/headset
 //     controls, a short "moonset" before the screen closes
+//   - HD calls: where the server says this account can (GET
+//     /api/voice/realtime/status, asked once the page has loaded) and the
+//     browser has WebRTC, the call talks speech to speech with the Realtime
+//     API instead (lib/realtimeCall.js): no turns of ours, the server's turn
+//     detection, interrupting by just talking. If it can't connect, drops or
+//     its time is up, the classic call above takes over in the same screen.
 
 // The silence that ends your turn. After a final phrase the recognizer has
 // already waited out a pause of its own (~0.4-0.8 s) before giving it, so
@@ -47,6 +58,28 @@ const FILLER_CHANCE = 0.75;
 const FILLER_GAP_MS = 120;
 const HANDS_FREE_KEY = "luna_call_handsfree";
 const TURNS_SEEN_KEY = "luna_call_turns_seen";
+// An HD call that failed to connect or dropped on this device: the next
+// calls are classic for a while (a network that blocks WebRTC stays one).
+const RT_TROUBLE_KEY = "luna_rt_trouble_until";
+const RT_TROUBLE_PAUSE_MS = 6 * 60 * 60 * 1000;
+const RT_STATUS_DELAY_MS = 1500; // asked this long after the page loaded
+// The device's own voice, for a piece the server's couldn't make: the
+// locale of the language she answers in.
+const SPEECH_LOCALES = { tr: "tr-TR", en: "en-US", es: "es-ES", de: "de-DE", ru: "ru-RU", it: "it-IT" };
+
+function speechLocale(code) {
+  const c = String(code || "").toLowerCase();
+  if (SPEECH_LOCALES[c]) return SPEECH_LOCALES[c];
+  return /^[a-z]{2,3}-[a-z0-9]{2,8}$/i.test(c) ? code : "en-US";
+}
+
+function realtimeTroubleRecently() {
+  try { return Number(localStorage.getItem(RT_TROUBLE_KEY)) > Date.now(); } catch (_) { return false; }
+}
+
+function noteRealtimeTrouble() {
+  try { localStorage.setItem(RT_TROUBLE_KEY, String(Date.now() + RT_TROUBLE_PAUSE_MS)); } catch (_) {}
+}
 const isAndroid = /Android/i.test(navigator.userAgent);
 const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
@@ -101,7 +134,17 @@ function setPlaybackState(value) {
 
 // fillerChance: the odds of her "hmm" on a turn — the app leaves it at
 // FILLER_CHANCE; only tests pin it (1: every turn that may have one, 0: never).
-export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn, fillerChance = FILLER_CHANCE }) {
+// mode / conversationId: the thread an HD call's transcript is stored in
+// (null: the mode's own thread). onTranscriptTurn({role, text, actions?}):
+// each finished turn of an HD call ("user" | "assistant"), for the chat
+// behind the call screen (the server has stored it already); `actions`:
+// what her tools did just before that answer (a reminder set, a note
+// saved — the chat's cards), on an assistant turn — with text "" when the
+// call ended before she said anything about it.
+export function useVoiceCall({
+  lang, t, quotaMessage, speech, sending, sendTurn, fillerChance = FILLER_CHANCE,
+  mode = "friend", conversationId = null, onTranscriptTurn = null,
+}) {
   const [active, setActive] = useState(false);     // screen mounted
   const [closing, setClosing] = useState(false);   // moonset running
   const [handsFree, setHandsFree] = useState(() => {
@@ -126,6 +169,19 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   const [micCheck, setMicCheck] = useState("idle");      // "idle" | "retrying" | "failed" (see below)
   const [player] = useState(createVoicePlayer);          // her voice (lib/voicePlayer.js)
   const [filler] = useState(createVoiceFiller);          // her "hmm" (lib/voiceFiller.js)
+  // HD call (lib/realtimeCall.js): on, its state ("connecting" |
+  // "listening" | "user-speaking" | "thinking" | "speaking"), your words as
+  // they are transcribed, the mic muted, a help card the server sent, and a
+  // one-line note on the screen (e.g. the HD call fell back to the classic one).
+  const [rtOn, setRtOn] = useState(false);
+  const [rtState, setRtState] = useState("connecting");
+  const [rtHeard, setRtHeard] = useState("");
+  const [rtMuted, setRtMuted] = useState(false);
+  const [rtSafety, setRtSafety] = useState(null);
+  const [notice, setNotice] = useState("");
+  const rtRef = useRef(null);       // the live HD call
+  const rtStatusRef = useRef(null); // what the server said about HD calls for this account
+  const rtFlushRef = useRef(null);  // hands what its tools did to the chat (see startRealtime)
 
   const liveRef = useRef(false);
   const genRef = useRef(0);            // which call a reply belongs to (bumped on every open)
@@ -153,7 +209,38 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
 
   // Latest values for callbacks that run later (timers, media events).
   const latest = useRef({});
-  latest.current = { speech, sending, handsFree, autoPaused, lang, t, quotaMessage, sendTurn, voiceFailed, fillerChance };
+  latest.current = {
+    speech, sending, handsFree, autoPaused, lang, t, quotaMessage, sendTurn, voiceFailed, fillerChance,
+    mode, conversationId, onTranscriptTurn,
+  };
+
+  // What the server says about HD calls for this account — and the voice
+  // she speaks with, which picks her filler clips (lib/voiceFiller.js).
+  const refreshRealtimeStatus = useCallback(() => {
+    if (typeof fetchRealtimeStatus !== "function") return;
+    Promise.resolve()
+      .then(() => fetchRealtimeStatus())
+      .then((s) => {
+        if (!s || typeof s !== "object") return;
+        rtStatusRef.current = s;
+        if (typeof s.voice === "string" && s.voice) setFillerVoice(s.voice);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const id = setTimeout(refreshRealtimeStatus, RT_STATUS_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [refreshRealtimeStatus]);
+
+  // One more turn of yours in a call (the coach hints go after two).
+  const countTurn = useCallback(() => {
+    setTurnsSeen((n) => {
+      const next = n + 1;
+      try { localStorage.setItem(TURNS_SEEN_KEY, String(next)); } catch (_) {}
+      return next;
+    });
+  }, []);
 
   // ---------------------------------------------------------------- audio
   const clearMediaSession = useCallback(() => {
@@ -242,7 +329,8 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   const startListening = useCallback(() => {
     cancelListenTimer();
     const { speech: sp } = latest.current;
-    if (!liveRef.current || !sp.supported || sp.listening) return;
+    // (never during an HD call: it has the mic, and turns of its own)
+    if (!liveRef.current || rtRef.current || !sp.supported || sp.listening) return;
     lastInterimRef.current = "";
     if (!sp.start()) {
       // The previous session is still ending — try once more shortly.
@@ -258,8 +346,8 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   // recognizer).
   const canAutoListen = useCallback(() => {
     const { speech: sp, sending: busy, handsFree: hf, autoPaused: paused } = latest.current;
-    return liveRef.current && hf && !paused && sp.supported && !sp.error && !sp.listening && !sp.transcribing
-      && !busy && !player.active() && !filler.audible() && document.visibilityState === "visible";
+    return liveRef.current && !rtRef.current && hf && !paused && sp.supported && !sp.error && !sp.listening
+      && !sp.transcribing && !busy && !player.active() && !filler.audible() && document.visibilityState === "visible";
   }, [player, filler]);
 
   // Hands-free: reopen the mic after `delay` if nothing else is going on.
@@ -320,8 +408,9 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
       // Her first piece never starts over her "hmm": it waits until that is
       // over, plus a breath (until then the screen still says "thinking").
       before: () => filler.whenDone(FILLER_GAP_MS),
-      // The device's voice, for a piece the server's couldn't make.
-      lang: latest.current.lang === "tr" ? "tr-TR" : "en-US",
+      // The device's voice, for a piece the server's couldn't make — in the
+      // language she answers in (any of the reply languages, not just TR/EN).
+      lang: speechLocale(replyLang(latest.current.lang)),
       onPieceReady: (i) => {
         if (i !== 0) return;
         if (lastReplyRef.current === r) setCanReplay(true);
@@ -501,6 +590,158 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
     return true;
   }, [cancelListenTimer, clearTurn, stopSpeaking, forgetLastReply, stopFiller]);
 
+  // ---------------------------------------------------------------- HD call
+  // Whether this call goes over the Realtime API: the server said this
+  // account can (rtStatusRef), the browser has WebRTC, and no HD call broke
+  // on this device lately.
+  const realtimeWanted = useCallback(() => {
+    const s = rtStatusRef.current;
+    return !!s?.available && typeof startRealtimeVoice === "function" && realtimeSupported()
+      && !realtimeTroubleRecently();
+  }, []);
+
+  // The HD call ended on its own (`reason`) or couldn't start (`startError`):
+  // the classic call carries on in the same screen, with a one-line note. A
+  // call that couldn't start goes on the way the classic one starts
+  // (hands-free listening); one that ended waits for a tap.
+  const realtimeLost = useCallback((reason, startError = null) => {
+    rtRef.current = null;
+    setRtOn(false);
+    setRtMuted(false);
+    setRtHeard("");
+    setRtState("connecting");
+    if (!liveRef.current) return;
+    const tr = latest.current.t;
+    const refused = startError?.stage === "session";
+    if (refused) {
+      rtStatusRef.current = { ...(rtStatusRef.current || {}), available: false };
+    } else if ((startError && startError.stage !== "mic" && startError.stage !== "start")
+      || reason === "disconnected" || reason === "expired") {
+      noteRealtimeTrouble();
+    }
+    // A refusal says why in the user's language (the server's `detail`:
+    // today's HD minutes, this week's HD time, too many calls…).
+    const detail = refused ? startError?.cause?.response?.data?.detail : null;
+    const said = typeof detail === "string" && detail.trim() && detail.length <= 240 ? detail.trim() : "";
+    setNotice(reason === "max_duration" || reason === "limit"
+      ? tr("HD görüşme süren doldu; standart sesle devam edebilirsin.", "Your HD call time is up; you can keep talking with the standard voice.")
+      : said
+        ? said
+        : startError
+          ? tr("HD ses şu an bağlanamadı; standart sesle devam ediyoruz.", "HD voice couldn't connect right now, so we're continuing with the standard voice.")
+          : tr("HD bağlantı koptu; standart sesle devam edebilirsin.", "The HD connection dropped; you can keep talking with the standard voice."));
+    if (startError) {
+      const { speech: sp, handsFree: hf, sending: busy } = latest.current;
+      if (hf && sp.supported && !busy) startListening();
+    } else {
+      setAutoPaused(true);
+    }
+    setTimeout(refreshRealtimeStatus, 2000);
+  }, [startListening, refreshRealtimeStatus]);
+
+  // Start the HD call — inside the tap that opened the call (the mic's
+  // permission prompt belongs to it).
+  const startRealtime = useCallback(() => {
+    const gen = genRef.current;
+    const isCurrent = () => liveRef.current && gen === genRef.current;
+    let mic;
+    try {
+      mic = requestMicrophone();
+    } catch (e) {
+      mic = Promise.reject(e);
+    }
+    Promise.resolve(mic).catch(() => {}); // (the call itself handles a refusal)
+    const replyIds = new Map();
+    const replyIdFor = (itemId) => {
+      const key = itemId || "reply";
+      if (!replyIds.has(key)) replyIds.set(key, `l-rt-${gen}-${replyIds.size}`);
+      return replyIds.get(key);
+    };
+    // The thread the server stores this call in (its tools check it too),
+    // and what her tools did, for her next answer's line in the chat.
+    let threadId = latest.current.conversationId || null;
+    let pendingActions = [];
+    const takeActions = () => {
+      const list = pendingActions;
+      pendingActions = [];
+      return list;
+    };
+    // What her tools did, if she never got to say it (the call ended, or you
+    // hung up — teardown calls it): its cards still reach the chat.
+    const flushActions = () => {
+      const actions = takeActions();
+      if (actions.length) latest.current.onTranscriptTurn?.({ role: "assistant", text: "", actions });
+    };
+    const call = createRealtimeCall({
+      startSession: () => startRealtimeVoice({
+        mode: latest.current.mode, conversationId: latest.current.conversationId, lang: replyLang(latest.current.lang),
+      }).then((s) => {
+        if (s && typeof s.conversation_id === "string" && s.conversation_id) threadId = s.conversation_id;
+        return s;
+      }),
+      mic,
+      connectSdp: typeof connectRealtimeVoice === "function"
+        ? ({ sessionId, sdp }) => connectRealtimeVoice({ sessionId, sdp })
+        : null,
+      callTool: typeof runAgentToolCall === "function"
+        ? ({ name, arguments: args }) => runAgentToolCall({ name, arguments: args, conversationId: threadId })
+        : null,
+      postTranscript: ({ sessionId, turns }) => sendRealtimeTranscript({ sessionId, turns }),
+      endSession: (args) => endRealtimeVoice(args),
+      audioContext: voiceContext(),
+      on: {
+        state: (s) => {
+          if (isCurrent() && rtRef.current === call) setRtState(s);
+        },
+        userInterim: (text) => {
+          if (isCurrent()) setRtHeard(text);
+        },
+        userFinal: (text) => {
+          if (!isCurrent()) return;
+          setRtHeard("");
+          setLastSent(text);
+          setFlareKey((k) => k + 1);
+          countTurn();
+          latest.current.onTranscriptTurn?.({ role: "user", text });
+        },
+        assistantDelta: (text, itemId) => {
+          if (isCurrent()) showReply(replyIdFor(itemId), text);
+        },
+        assistantFinal: (text, itemId) => {
+          if (!isCurrent()) return;
+          showReply(replyIdFor(itemId), text);
+          const actions = takeActions();
+          latest.current.onTranscriptTurn?.({ role: "assistant", text, ...(actions.length ? { actions } : {}) });
+        },
+        safety: (payload) => {
+          if (isCurrent() && payload?.kind) setRtSafety(payload);
+        },
+        actions: (list) => {
+          if (isCurrent() && Array.isArray(list)) pendingActions = [...pendingActions, ...list].slice(-10);
+        },
+        ended: ({ reason }) => {
+          if (isCurrent()) flushActions();
+          if (isCurrent() && rtRef.current === call) realtimeLost(reason);
+        },
+      },
+    });
+    rtFlushRef.current = flushActions;
+    rtRef.current = call;
+    setRtOn(true);
+    setRtState("connecting");
+    setRtHeard("");
+    setRtMuted(false);
+    setNotice("");
+    call.start().catch((e) => {
+      if (rtRef.current !== call) return; // hung up, or a newer call
+      if (!isCurrent()) {
+        rtRef.current = null;
+        return;
+      }
+      realtimeLost(null, e);
+    });
+  }, [showReply, countTurn, realtimeLost]);
+
   // Your turn `turnId` was just sent: if FILLER_DELAY_MS later nothing of her
   // reply can be heard yet — no piece of it arrived, she isn't saying
   // anything, nothing failed, the screen still says "thinking" — she says a
@@ -560,16 +801,12 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
     setLastSent(text);
     setVoiceFailed(null);
     setFlareKey((k) => k + 1);
-    setTurnsSeen((n) => {
-      const next = n + 1;
-      try { localStorage.setItem(TURNS_SEEN_KEY, String(next)); } catch (_) {}
-      return next;
-    });
+    countTurn();
     const ctl = new window.AbortController();
     turnCtlRef.current = ctl;
     latest.current.sendTurn(text, { turnId, signal: ctl.signal });
     scheduleFiller(turnId);
-  }, [scheduleFiller]);
+  }, [scheduleFiller, countTurn]);
   const flushTurnRef = useRef(flushTurn);
   flushTurnRef.current = flushTurn;
 
@@ -727,7 +964,8 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   useEffect(() => {
     if (!active) return undefined;
     const onVisibility = () => {
-      if (!liveRef.current) return;
+      // (an HD call goes on in the background, like a phone call)
+      if (!liveRef.current || rtRef.current) return;
       if (document.visibilityState === "hidden") {
         cancelListenTimer();
         stopFiller(); // (her reply itself goes on, see above)
@@ -745,6 +983,17 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   const teardown = useCallback(() => {
     if (!liveRef.current) return;
     liveRef.current = false;
+    const rt = rtRef.current;
+    rtRef.current = null;
+    if (rt) {
+      rtFlushRef.current?.();
+      rt.hangUp("user"); // its last turns and its end go to the server
+      setTimeout(refreshRealtimeStatus, 2500); // (its minutes left changed)
+    }
+    rtFlushRef.current = null;
+    setRtOn(false);
+    setRtMuted(false);
+    setRtHeard("");
     streamRef.current = null;
     turnCtlRef.current?.abort(); // a turn still on its way is let go
     turnCtlRef.current = null;
@@ -763,7 +1012,8 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
       setActive(false);
       setClosing(false);
     }, prefersReducedMotion() ? 0 : CLOSE_ANIMATION_MS);
-  }, [player, stopSpeaking, cancelListenTimer, clearTurn, forgetLastReply, clearMediaSession, stopFiller]);
+  }, [player, stopSpeaking, cancelListenTimer, clearTurn, forgetLastReply, clearMediaSession, stopFiller,
+    refreshRealtimeStatus]);
 
   // Every way out goes through history, so Android Back and the on-screen
   // buttons share one path and no stray history entry is left behind.
@@ -806,11 +1056,19 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
     setVoiceFailed(null);
     setLastSent("");
     setAutoPaused(false);
+    setRtSafety(null);
+    setNotice("");
     setClosing(false);
     setActive(true);
     if (!window.history.state?.lunaCall) {
       // Keep React Router's own state; same URL, just a marker.
       window.history.pushState({ ...window.history.state, lunaCall: true }, "");
+    }
+    // An HD call where this account and browser can make one (the classic
+    // call takes over if it can't connect).
+    if (realtimeWanted()) {
+      startRealtime();
+      return;
     }
     // Hands-free starts listening straight away — still inside the tap, so
     // a first-time mic permission prompt appears right now.
@@ -819,12 +1077,15 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
     if (hf && sp.supported && !latest.current.sending) {
       setTimeout(() => { if (liveRef.current) startListening(); }, 0);
     }
-  }, [player, startListening, clearTurn, stopFiller]);
+  }, [player, startListening, clearTurn, stopFiller, realtimeWanted, startRealtime]);
 
   useEffect(() => () => {
     clearTimeout(closeTimerRef.current);
     clearTimeout(listenTimerRef.current);
     clearTimeout(turnRef.current.timer);
+    const rt = rtRef.current;
+    rtRef.current = null;
+    if (rt) rt.hangUp("user");
     stopFiller();
     player.release();
     forgetLastReply();
@@ -833,7 +1094,14 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   // ---------------------------------------------------------------- controls
   // A "not-allowed" we're still quietly retrying is not an error yet.
   const micRetrying = speech.error === "not-allowed" && micCheck !== "failed";
+  // An HD call's state on the call screen: "connecting" and "muted" (your
+  // mic off) exist only there; your turn and the pause before her answer
+  // are the server's (listening / thinking).
+  const rtView = rtState === "speaking" ? "speaking"
+    : rtState === "thinking" ? "thinking"
+      : rtState === "listening" || rtState === "user-speaking" ? "listening" : "connecting";
   const state = (() => {
+    if (rtOn) return rtMuted && rtView === "listening" ? "muted" : rtView;
     if (!speech.supported) return "error";
     if (speech.error && !speech.listening && !micRetrying) return "error";
     if (speech.listening || handoff || micRetrying) return "listening";
@@ -853,6 +1121,22 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
 
   const mainAction = useCallback(() => {
     primeVoiceAudio();
+    const rt = rtRef.current;
+    if (rt) {
+      // HD call: cut in while she speaks (talking does it too), mute and
+      // unmute your mic; nothing to do while it connects or she thinks.
+      if (state === "speaking") {
+        rt.interrupt();
+      } else if (state === "listening") {
+        rt.setMuted(true);
+        setRtMuted(true);
+      } else if (state === "muted") {
+        rt.setMuted(false);
+        setRtMuted(false);
+      }
+      return;
+    }
+    setNotice("");
     const sp = latest.current.speech;
     setAutoPaused(false);
     silenceRef.current = 0;
@@ -942,8 +1226,11 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
   }, [state, startListening]);
 
   // For the captions: how much of the reply she has said (0..1 of its text
-  // so far — it may still be growing).
+  // so far — it may still be growing). In an HD call, estimated from how
+  // long she has been speaking.
   const speechProgress = useCallback(() => {
+    const rt = rtRef.current;
+    if (rt) return rt.progress();
     const total = replyLenRef.current;
     return total ? Math.min(1, player.said() / total) : 0;
   }, [player]);
@@ -963,22 +1250,26 @@ export function useVoiceCall({ lang, t, quotaMessage, speech, sending, sendTurn,
     handleSpeechEnd,
     modalProps: {
       state,
-      capturing: speech.capturing,
-      interim: speech.interim,
-      pendingText,
-      speechError: speech.error,
-      supported: speech.supported,
+      capturing: rtOn ? rtState !== "connecting" : speech.capturing,
+      interim: rtOn ? rtHeard : speech.interim,
+      pendingText: rtOn ? "" : pendingText,
+      speechError: rtOn ? null : speech.error,
+      supported: rtOn ? true : speech.supported,
       lastSent,
       replyText: reply?.text || "",
       voiceFailedMessage: voiceFailed?.message || "",
       turnFailed: voiceFailed?.kind === "turn",
-      canSkipVoice,
-      canReplay,
+      canSkipVoice: rtOn ? false : canSkipVoice,
+      canReplay: rtOn ? false : canReplay,
       handsFree,
       autoPaused,
       coach: turnsSeen < 2,
       speechProgress,
-      analyser: state === "speaking" ? analyser : null,
+      analyser: state === "speaking" ? (rtOn ? rtRef.current?.analyser() || null : analyser) : null,
+      realtime: rtOn,
+      muted: rtOn && rtMuted,
+      notice,
+      realtimeSafety: rtSafety,
       flareKey,
       exiting: closing,
       onMainAction: mainAction,

@@ -111,7 +111,7 @@ describe("fetchTTSStream", () => {
     expect(requests[0].init.headers).toEqual(expect.objectContaining({
       "X-Device-Id": "dev-1", "X-Device-Secret": "secret-1", "Content-Type": "application/json",
     }));
-    expect(requests[0].body).toEqual({ text: "Merhaba!", voice: "coral", turn_id: "t-1", part: 2 });
+    expect(requests[0].body).toEqual({ text: "Merhaba!", turn_id: "t-1", part: 2 });
     expect(got.rate).toBe(24000);
     expect(got.url).toBeUndefined();
     expect(await readAll(got.reader)).toEqual([[1, 2, 3], [4, 5]]);
@@ -120,7 +120,7 @@ describe("fetchTTSStream", () => {
   test("no turn id: no turn_id / part, as fetchTTS", async () => {
     const { requests } = serve([]);
     await api.fetchTTSStream({ text: "Olur." });
-    expect(requests[0].body).toEqual({ text: "Olur.", voice: "coral" });
+    expect(requests[0].body).toEqual({ text: "Olur." } /* no voice: the server picks Luna's */);
   });
 
   test("a clip the server had whole (its cache) comes as an MP3 blob URL", async () => {
@@ -219,7 +219,7 @@ describe("fetchTTS (unchanged)", () => {
     const url = await api.fetchTTS({ text: "Merhaba!", turnId: "t-1", part: 1 });
     expect(url).toBe("blob:mp3");
     expect(axios.post).toHaveBeenCalledWith(expect.stringMatching(/\/api\/tts$/),
-      { text: "Merhaba!", voice: "coral", turn_id: "t-1", part: 1 }, expect.anything());
+      { text: "Merhaba!", turn_id: "t-1", part: 1 }, expect.anything());
     expect(window.fetch).not.toHaveBeenCalled();
     expect(blobs[0].type).toBe("audio/mpeg");
     delete window.fetch;

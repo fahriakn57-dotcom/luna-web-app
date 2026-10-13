@@ -3,6 +3,7 @@ import { X, Trash2, Download, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { IconTile } from "@/components/icons/LunaIcon";
 import { serverDetail } from "@/lib/errorText";
+import { makeT } from "@/lib/i18n";
 import {
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
   fetchGeneratedPdfs, fetchGeneratedExcels, fetchGeneratedWords, fetchGeneratedPpts, fetchGeneratedTableImages, fetchGeneratedCharts,
@@ -77,13 +78,24 @@ const KIND_CONFIG = {
   },
 };
 
+// The same files can simply be asked for in chat, like with ChatGPT (backend
+// services/chat_actions.py, every plan): an example per kind, shown above
+// the form.
+const CHAT_TIPS = {
+  pdf: { tr: "“Yapay zekanın tarihi hakkında bir PDF rapor hazırla”", en: "“Make a PDF report on the history of AI”" },
+  word: { tr: "“Okul projem için bir Word belgesi hazırla”", en: "“Write a Word document for my school project”" },
+  excel: { tr: "“Aylık bütçem için bir Excel tablosu hazırla”", en: "“Create an Excel sheet for my monthly budget”" },
+  ppt: { tr: "“Yenilenebilir enerji hakkında bir sunum hazırla”", en: "“Prepare a presentation about renewable energy”" },
+};
+
 export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
-  const t = (tr, en) => (lang === "tr" ? tr : en);
+  const t = makeT(lang);
   const cfg = KIND_CONFIG[kind];
   const { gradient, ext: fileExt } = cfg;
   const panelTitle = t(cfg.title.tr, cfg.title.en);
   const generateLabel = t(cfg.generateLabel.tr, cfg.generateLabel.en);
   const dataPlaceholder = t(cfg.placeholder.tr, cfg.placeholder.en);
+  const chatTip = CHAT_TIPS[kind];
 
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -152,6 +164,15 @@ export default function DocGeneratorPanel({ kind, lang, mode, onClose }) {
             <X size={16} />
           </button>
         </div>
+
+        {chatTip && (
+          <p className="shrink-0 mb-3 rounded-xl border border-purple-400/15 bg-purple-400/[0.06] px-3.5 py-2.5 text-xs leading-relaxed text-purple-100/80"
+            data-testid="doc-gen-chat-tip">
+            {t("İpucu: sohbette istemen de yeter, dosya mesajın altına gelir. Örn: ",
+              "Tip: you can also just ask in chat and the file shows up under the reply. E.g. ")}
+            <span className="text-purple-50">{t(chatTip.tr, chatTip.en)}</span>
+          </p>
+        )}
 
         <div className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] p-4 mb-4">
           <input

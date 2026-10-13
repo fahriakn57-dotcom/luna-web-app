@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { Download, X, FileText, Maximize2 } from "lucide-react";
 import lunaAvatar from "@/assets/luna-avatar.webp";
 import Markdown from "@/components/Markdown";
-import { AttachmentList, SourceChips } from "@/components/MessageExtras";
+import { ActionCards, AttachmentList, SourceChips } from "@/components/MessageExtras";
+import { makeT, uiLang } from "../lib/i18n";
 
 // memo: a streaming reply updates the message list many times a second, but
 // only its own bubble gets a new msg object (lib/streamedTurn.js) — the
@@ -12,13 +13,18 @@ import { AttachmentList, SourceChips } from "@/components/MessageExtras";
 // Luna's text is Markdown (components/Markdown.jsx: headings, lists, tables,
 // code with a copy button, links that open in a new tab), also while it
 // streams in; what you typed stays plain text. Under her reply: the
-// pictures / files made in chat (msg.attachments) and the web pages a
-// searched reply used (msg.sources).
+// pictures / files made in chat (msg.attachments — also a PDF, Word, Excel
+// or deck asked for straight away), what she did in your account
+// (msg.actions: a reminder card with "Takvime ekle" / ".ics indir", a note,
+// a goal...) and the web pages a searched reply used (msg.sources).
 function ChatMessage({ msg, lang = "tr" }) {
   const isUser = msg.role === "user";
   // The picture open full screen: { src, name } | null.
   const [lightbox, setLightbox] = useState(null);
-  const t = (tr, en) => (lang === "en" ? en : tr);
+  // The interface language, "tr" or "en" (lib/i18n.js) — a "de" or "es"
+  // screen reads English labels, never Turkish ones.
+  const ui = uiLang(lang);
+  const t = makeT(ui);
 
   const userBubble = "bg-gradient-to-br from-fuchsia-500/22 to-indigo-500/18 border-fuchsia-400/30 text-fuchsia-50";
   const lunaBubble = "bg-[#140b28]/90 border-purple-400/20 text-purple-50";
@@ -61,9 +67,10 @@ function ChatMessage({ msg, lang = "tr" }) {
         )}
         {msg.text && (isUser
           ? <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-          : <Markdown text={msg.text} streaming={Boolean(msg.streaming)} lang={lang} />)}
-        {!isUser && <AttachmentList attachments={msg.attachments} lang={lang} onOpenImage={setLightbox} />}
-        {!isUser && !msg.streaming && <SourceChips sources={msg.sources} lang={lang} />}
+          : <Markdown text={msg.text} streaming={Boolean(msg.streaming)} lang={ui} />)}
+        {!isUser && <AttachmentList attachments={msg.attachments} lang={ui} onOpenImage={setLightbox} />}
+        {!isUser && !msg.streaming && <ActionCards actions={msg.actions} lang={ui} />}
+        {!isUser && !msg.streaming && <SourceChips sources={msg.sources} lang={ui} />}
       </div>
 
       {lightbox && createPortal(

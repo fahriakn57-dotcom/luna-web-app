@@ -59,18 +59,51 @@ async function getCredentials() {
 export const RENDER_HEADER = "X-Luna-Render";
 export const RENDER_MODE = "markdown";
 
+// Where this browser is (backend services/user_locale.py): its IANA time
+// zone ("Europe/Berlin") and its language ("de-DE") go with every request,
+// so Luna's clock, web search location, reminders and crisis help numbers
+// follow the user instead of assuming Türkiye. The server stores them in
+// the profile once (and follows a new zone when the device moves); a value
+// the user set themselves is never overwritten.
+export const TIMEZONE_HEADER = "X-Luna-Timezone";
+export const LOCALE_HEADER = "X-Luna-Locale";
+
+const TIMEZONE_SHAPE = new RegExp("^[A-Za-z0-9_+/-]+$");
+const LOCALE_SHAPE = new RegExp("^[A-Za-z0-9-]+$");
+
+export function localeHeaders() {
+  const out = {};
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (typeof tz === "string" && tz && tz.length <= 64 && TIMEZONE_SHAPE.test(tz)) out[TIMEZONE_HEADER] = tz;
+  } catch (_) {
+    // no Intl time zone: the server keeps what it knows
+  }
+  try {
+    const nav = typeof navigator !== "undefined" ? navigator : null;
+    const lang = nav && (nav.language || (Array.isArray(nav.languages) ? nav.languages[0] : ""));
+    if (typeof lang === "string" && lang && lang.length <= 35 && LOCALE_SHAPE.test(lang)) out[LOCALE_HEADER] = lang;
+  } catch (_) {
+    // no browser language: nothing to send
+  }
+  return out;
+}
+
 async function authHeaders() {
   const { id, secret } = await getCredentials();
-  return { "X-Device-Id": id, "X-Device-Secret": secret, [RENDER_HEADER]: RENDER_MODE };
+  return { ...localeHeaders(), "X-Device-Id": id, "X-Device-Secret": secret, [RENDER_HEADER]: RENDER_MODE };
 }
 
 // ...and the requests made without the device's auth (registration, login,
-// pairing, features): every axios call to this API gets the header too.
+// pairing, features): every axios call to this API gets the headers too.
 axios.interceptors?.request?.use?.((config) => {
   if (!config || !String(config.url || "").startsWith(API)) return config;
   if (!config.headers) config.headers = {};
-  if (typeof config.headers.set === "function") config.headers.set(RENDER_HEADER, RENDER_MODE);
-  else config.headers[RENDER_HEADER] = RENDER_MODE;
+  const extra = { [RENDER_HEADER]: RENDER_MODE, ...localeHeaders() };
+  for (const [name, value] of Object.entries(extra)) {
+    if (typeof config.headers.set === "function") config.headers.set(name, value);
+    else config.headers[name] = value;
+  }
   return config;
 });
 
@@ -249,6 +282,19 @@ const GENERATED_FILE_META = [
   { base64Key: "chart_base64", mimeKey: "chart_mime", ext: "png" },
 ];
 
+// The help card of a reloaded flagged reply: { kind, resources?, country? }
+// (meta.safety is the kind string; an object with its own kind is read too),
+// or undefined for every other message.
+export function historySafety(meta) {
+  const raw = meta && meta.safety;
+  const kind = typeof raw === "string" ? raw : raw && typeof raw === "object" ? raw.kind : "";
+  if (!kind || typeof kind !== "string") return undefined;
+  const resources = Array.isArray(meta.safety_resources) ? meta.safety_resources
+    : raw && typeof raw === "object" && Array.isArray(raw.resources) ? raw.resources : null;
+  const country = typeof meta.safety_country === "string" ? meta.safety_country : null;
+  return { kind, ...(resources ? { resources } : {}), ...(country ? { country } : {}) };
+}
+
 function toWebMessage(m) {
   const meta = m.meta || {};
   const generated = GENERATED_FILE_META.find((k) => meta[k.base64Key]);
@@ -267,13 +313,21 @@ function toWebMessage(m) {
     // Turkish letters (ç/ğ/ı/ö/ş/ü) instead of stripping them from the name.
     fileName: generated ? `${(meta.title || "luna-dosya").replace(/[^\p{L}\p{N}\s-]/gu, "").trim() || "luna-dosya"}.${generated.ext}` : undefined,
     // A reply to a message the server flagged (backend services/safety.py):
-    // the help card with the emergency numbers stays under it after a reload.
-    safety: meta.safety ? { kind: meta.safety } : undefined,
+    // the help card with the emergency numbers stays under it after a reload
+    // — the user's own country's lines (GET /api/messages adds
+    // meta.safety_resources / meta.safety_country, the live turn's shape).
+    safety: historySafety(meta),
     // The web pages a searched reply cited (meta.web_sources; a researched
     // deck keeps meta.sources): the "Kaynaklar" chips stay under it after a
     // reload too.
     sources: (() => {
       const list = normalizeSources(Array.isArray(meta.web_sources) ? meta.web_sources : meta.sources);
+      return list.length ? list : undefined;
+    })(),
+    // What Luna did in the account that turn (meta.agent_actions — a
+    // reminder with its calendar links...): the cards stay after a reload.
+    actions: (() => {
+      const list = turnActions(meta.agent_actions);
       return list.length ? list : undefined;
     })(),
   };
@@ -311,12 +365,36 @@ export function normalizeAttachments(list) {
   return out;
 }
 
+// What Luna did in the user's account during a turn (backend services/
+// agent_tools.py: result["actions"], kept on the reply as meta.agent_actions):
+// [{type: "reminder_created" | "reminder_cancelled" | "note_created" |
+// "goal_added" | "goal_completed" | "memory_saved" | "memory_forgotten" |
+// "preference_set", id, summary, ...a reminder's text, due_at, timezone,
+// recurrence, calendar: {google_url, ics_url}}]. Only objects with a type
+// pass, at most 10, each a copy, still in the server's shape:
+// components/MessageExtras.jsx ActionCards cleans them for display
+// (lib/agentActions.js normalizeActions — known types, safe links only).
+const MAX_ACTIONS = 10;
+
+export function turnActions(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const a of list) {
+    if (out.length >= MAX_ACTIONS) break;
+    if (!a || typeof a !== "object" || Array.isArray(a)) continue;
+    if (typeof a.type !== "string" || !/^[a-z][a-z_]{1,39}$/.test(a.type)) continue;
+    out.push({ ...a });
+  }
+  return out;
+}
+
 // /api/chat's JSON, the stream's assistant_completed, /chat/media's answer
 // (or, from an older caller or server, just the reply text) as one shape:
-// { reply, messageId, sources, attachments, safety, degraded }. A picture
-// action answered without `attachments` (an older server) still shows its
-// picture from image_base64. Shaping a result that already is one returns
-// it as it is (streamChat({ full }) hands one to callers that shape again).
+// { reply, messageId, sources, attachments, actions, safety, degraded }. A
+// picture action answered without `attachments` (an older server) still
+// shows its picture from image_base64. Shaping a result that already is one
+// returns it as it is (streamChat({ full }) hands one to callers that shape
+// again).
 const TURN_RESULT = Symbol("luna.turnResult");
 
 function shaped(result) {
@@ -327,7 +405,7 @@ function shaped(result) {
 export function turnResult(data) {
   if (data && data[TURN_RESULT]) return data;
   if (typeof data === "string") {
-    return shaped({ reply: data, messageId: null, sources: [], attachments: [], safety: null, degraded: false });
+    return shaped({ reply: data, messageId: null, sources: [], attachments: [], actions: [], safety: null, degraded: false });
   }
   const d = data && typeof data === "object" ? data : {};
   let attachments = normalizeAttachments(d.attachments);
@@ -342,6 +420,7 @@ export function turnResult(data) {
     messageId: d.message_id != null ? String(d.message_id) : null,
     sources: normalizeSources(d.sources),
     attachments,
+    actions: turnActions(d.actions),
     safety: d.safety || null,
     degraded: Boolean(d.degraded),
   });
@@ -879,11 +958,13 @@ export async function clearMessages(mode, conversationId = null) {
 // Luna's voice for (a piece of) a reply, as a blob URL of MP3 audio. The
 // voice call asks for a reply sentence by sentence: `turnId` ties the pieces
 // (and the turn's speech recognition) together so the server counts ONE
-// voice use per turn; `part` is the piece's index. `signal` cancels it.
+// voice use per turn; `part` is the piece's index. `signal` cancels it. No
+// voice is named: the server speaks with Luna's one voice for this account
+// (its saved choice, else the default) — the voice of her filler clips and
+// her HD calls too (it used to send a hard-coded "coral").
 export async function fetchTTS({ text, turnId, part = 0, signal } = {}) {
   const headers = await authHeaders();
-  const voice = "coral";
-  const body = { text, voice, ...(turnId ? { turn_id: turnId, part } : {}) };
+  const body = { text, ...(turnId ? { turn_id: turnId, part } : {}) };
   const res = await axios.post(`${API}/tts`, body, { headers, signal });
   const bytes = atob(res.data.audio_base64);
   const arr = new Uint8Array(bytes.length);
@@ -925,7 +1006,7 @@ async function ttsStreamError(res) {
 // as fetchTTS's. `signal` cancels it, body included.
 export async function fetchTTSStream({ text, turnId, part = 0, signal } = {}) {
   const headers = { ...(await authHeaders()), "Content-Type": "application/json" };
-  const body = { text, voice: "coral", ...(turnId ? { turn_id: turnId, part } : {}) }; // (as fetchTTS)
+  const body = { text, ...(turnId ? { turn_id: turnId, part } : {}) }; // (as fetchTTS: the server picks her voice)
   const ctl = new window.AbortController();
   let idleTimer = null;
   let timedOut = false;
@@ -1008,6 +1089,83 @@ export async function transcribeAudio(blob, { turnId, signal } = {}) {
   if (turnId) form.append("turn_id", turnId);
   const res = await axios.post(`${API}/stt`, form, { headers, signal });
   return (res.data?.text || "").trim();
+}
+
+// ---- HD voice calls (backend routers/realtime_voice.py, lib/realtimeCall.js)
+
+// Whether this account can start an HD call now, and the voice Luna speaks
+// with: { available, reason, voice, model, minutes_left, ... }. null when
+// the server can't be asked (the call then uses the classic voice).
+export async function fetchRealtimeStatus() {
+  try {
+    const headers = await authHeaders();
+    const res = await axios.get(`${API}/voice/realtime/status`, { headers, timeout: 8000 });
+    return res.data && typeof res.data === "object" ? res.data : null;
+  } catch {
+    return null;
+  }
+}
+
+// Mints the call's short-lived client secret: { session_id, client_secret,
+// calls_url, max_seconds, heartbeat_seconds, greet, session_update, voice }.
+// Rejects with the axios error (403 plan, 429 minutes, 503 busy — its
+// X-Luna-Realtime header says which).
+export async function startRealtimeVoice({ mode, conversationId, lang, signal } = {}) {
+  const headers = await authHeaders();
+  const body = {
+    mode: mode === "work" ? "work" : "friend",
+    conversation_id: conversationId || null,
+    language: getReplyLang() || lang || null,
+  };
+  const res = await axios.post(`${API}/voice/realtime/session`, body, { headers, signal, timeout: 15000 });
+  return res.data;
+}
+
+// The call's SDP offer, relayed to OpenAI by the server (it keeps the
+// client secret and the call id) -> the SDP answer (a string). Rejects with
+// the axios error (409: the session is gone or was used, 502: OpenAI
+// refused).
+export async function connectRealtimeVoice({ sessionId, sdp, signal } = {}) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/voice/realtime/connect`, { session_id: sessionId, sdp },
+    { headers, signal, timeout: 20000 });
+  return typeof res.data?.sdp === "string" ? res.data.sdp : "";
+}
+
+// One of Luna's tools in an HD call (a reminder, a note), run by the server
+// (backend routers/agent_actions.py) -> { output: the JSON text she reads,
+// actions: the chat's cards }.
+export async function runAgentToolCall({ name, arguments: args = "{}", conversationId = null } = {}) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/agent/tool-call`,
+    { name, arguments: typeof args === "string" ? args : JSON.stringify(args || {}), conversation_id: conversationId || null },
+    { headers, timeout: 20000 });
+  const data = res.data && typeof res.data === "object" ? res.data : {};
+  return { output: typeof data.output === "string" ? data.output : "", actions: Array.isArray(data.actions) ? data.actions : [] };
+}
+
+// The call's finished turns ([{role, text, item_id}]) — also its heartbeat
+// (no turns). Answers { safety?, instructions_update?, tools_off?,
+// seconds_left?, stop?, stop_reason? }.
+export async function sendRealtimeTranscript({ sessionId, turns = [] } = {}) {
+  const headers = await authHeaders();
+  const res = await axios.post(`${API}/voice/realtime/transcript`, { session_id: sessionId, turns },
+    { headers, timeout: 15000 });
+  return res.data || {};
+}
+
+// The end of the call, with its last turns — keepalive: it still goes when
+// the page is closing (closing the tab ends the call).
+export async function endRealtimeVoice({ sessionId, turns = [], reason = "user", usage = null } = {}) {
+  const headers = { ...(await authHeaders()), "Content-Type": "application/json" };
+  const res = await fetch(`${API}/voice/realtime/end`, {
+    method: "POST",
+    headers,
+    keepalive: true,
+    body: JSON.stringify({ session_id: sessionId, turns, reason, ...(usage ? { usage } : {}) }),
+  });
+  if (!res.ok) throw new Error(`realtime end failed: ${res.status}`);
+  return res.json().catch(() => ({}));
 }
 
 export async function fetchMemories() {
@@ -1100,6 +1258,21 @@ export async function createReminder({ text, due_at, recurrence }) {
 export async function cancelReminder(reminderId) {
   const headers = await authHeaders();
   await axios.delete(`${API}/reminders/${reminderId}`, { headers });
+}
+// A reminder as an .ics file (GET /api/reminders/{id}.ics, backend
+// routers/calendar_links.py) — the ".ics indir" button of a reminder card
+// (components/MessageExtras.jsx ActionCards). A Blob; errors look like
+// axios's (e.response). Only this API's own route gets the device's auth.
+export async function fetchReminderIcs(reminderId, { signal } = {}) {
+  const id = String(reminderId || "");
+  if (!/^[a-f0-9]{24}$/i.test(id)) throw httpLikeError(404, "");
+  const headers = await authHeaders();
+  const res = await fetch(`${API}/reminders/${id}.ics`, { headers, ...(signal ? { signal } : {}) });
+  if (!res.ok) {
+    if (res.status === 401) sessionLost();
+    throw httpLikeError(res.status, "");
+  }
+  return res.blob();
 }
 
 // ---- Günlük ----

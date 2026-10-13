@@ -2,22 +2,24 @@ import { ChevronRight, X } from "lucide-react";
 import { LunaIcon, hueRgb } from "@/components/icons/LunaIcon";
 import lunaLogo from "@/assets/luna-logo.webp";
 
+// label: Turkish, en: the English screen's (every language but Turkish reads
+// English — Luna is used worldwide; the panels' own titles match these).
 const MODE_ITEMS = [
-  { key: "friend", glyph: "friend", label: "Arkadaş Modu" },
-  { key: "work", glyph: "work", label: "LunaWorks Modu" },
+  { key: "friend", glyph: "friend", label: "Arkadaş Modu", en: "Friend Mode" },
+  { key: "work", glyph: "work", label: "LunaWorks Modu", en: "LunaWorks Mode" },
 ];
 
 const FRIEND_ITEMS = [
-  { key: "journal", glyph: "journal", label: "Günlük" },
-  { key: "memories", glyph: "memories", label: "Anılarım" },
-  { key: "mood", glyph: "mood", label: "Ruh Halim" },
-  { key: "day-info", glyph: "dayinfo", label: "Günün Anlamı" },
-  { key: "hobbies", glyph: "hobbies", label: "Hobilerim" },
-  { key: "goals", glyph: "goals", label: "Hedeflerim & Planlarım" },
-  { key: "notes", glyph: "notes", label: "Notlarım" },
-  { key: "alarms", glyph: "alarms", label: "Alarmlar" },
-  { key: "usage", glyph: "usage", label: "Kullanımım" },
-  { key: "settings", glyph: "settings", label: "Ayarlar" },
+  { key: "journal", glyph: "journal", label: "Günlük", en: "Journal" },
+  { key: "memories", glyph: "memories", label: "Anılarım", en: "My Memories" },
+  { key: "mood", glyph: "mood", label: "Ruh Halim", en: "My Mood" },
+  { key: "day-info", glyph: "dayinfo", label: "Günün Anlamı", en: "Today's Significance" },
+  { key: "hobbies", glyph: "hobbies", label: "Hobilerim", en: "My Hobbies" },
+  { key: "goals", glyph: "goals", label: "Hedeflerim & Planlarım", en: "My Goals & Plans" },
+  { key: "notes", glyph: "notes", label: "Notlarım", en: "My Notes" },
+  { key: "alarms", glyph: "alarms", label: "Alarmlar", en: "Reminders" },
+  { key: "usage", glyph: "usage", label: "Kullanımım", en: "My Usage" },
+  { key: "settings", glyph: "settings", label: "Ayarlar", en: "Settings" },
 ];
 
 // Görsel üretiminin kendisi LunaWorks'ün sohbet giriş çubuğundaki Wand2
@@ -28,14 +30,14 @@ const FRIEND_ITEMS = [
 // "work-excel" ise indirilebilir bir .xlsx dosyası; ikisi de aynı
 // structure_table() çıktısını farklı şekilde render eder.
 const WORK_ITEMS = [
-  { key: "work-images", glyph: "images", label: "Ürettiklerim: Görsel" },
-  { key: "work-pdf", glyph: "pdf", label: "Ürettiklerim: PDF" },
-  { key: "work-excel", glyph: "excel", label: "Ürettiklerim: Excel" },
-  { key: "work-word", glyph: "word", label: "Ürettiklerim: Word" },
-  { key: "work-ppt", glyph: "ppt", label: "Ürettiklerim: PowerPoint" },
-  { key: "work-table", glyph: "table", label: "Ürettiklerim: Tablo" },
-  { key: "work-chart", glyph: "chart", label: "Ürettiklerim: Grafik" },
-  { key: "settings", glyph: "settings", label: "Ayarlar" },
+  { key: "work-images", glyph: "images", label: "Ürettiklerim: Görsel", en: "My Images" },
+  { key: "work-pdf", glyph: "pdf", label: "Ürettiklerim: PDF", en: "My PDFs" },
+  { key: "work-excel", glyph: "excel", label: "Ürettiklerim: Excel", en: "My Excel Files" },
+  { key: "work-word", glyph: "word", label: "Ürettiklerim: Word", en: "My Word Docs" },
+  { key: "work-ppt", glyph: "ppt", label: "Ürettiklerim: PowerPoint", en: "My Slides" },
+  { key: "work-table", glyph: "table", label: "Ürettiklerim: Tablo", en: "My Tables" },
+  { key: "work-chart", glyph: "chart", label: "Ürettiklerim: Grafik", en: "My Charts" },
+  { key: "settings", glyph: "settings", label: "Ayarlar", en: "Settings" },
 ];
 
 // The router's basename is "/app", so react-router's navigate("/") only
@@ -98,7 +100,7 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
                   : "text-white/55 hover:text-white hover:bg-white/5"
               }`}>
               <SidebarGlyph name={it.glyph} active={isActive} />
-              {it.label}
+              {t(it.label, it.en)}
             </button>
           );
         })}
@@ -123,7 +125,7 @@ export default function Sidebar({ mode, lang, active, onNavigate, onOpenMemories
                   : "text-white/55 hover:text-white hover:bg-white/5"
               }`}>
               <SidebarGlyph name={it.glyph} active={isActive} />
-              {it.label}
+              {t(it.label, it.en)}
             </button>
           );
         })}

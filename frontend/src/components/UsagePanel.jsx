@@ -13,6 +13,9 @@ import { locale, relativeTime } from "@/lib/dates";
 
 // The backend reports "no daily cap" as a huge sentinel limit.
 const NO_LIMIT = 1e9;
+// The free plan's daily caps (backend config.PLANS["free"]) for a /usage
+// answer that leaves them out.
+const FREE_DEFAULTS = Object.freeze({ chat: 30, voice: 5 });
 const DAY_MS = 86400000;
 
 // /api/usage returns the internal config.PLANS keys; show the names the user
@@ -451,8 +454,10 @@ export default function UsagePanel({ lang, onClose, onOpenPremium }) {
 
     let description;
     if (plan.tier === "free") {
-      const chatLimit = readCounter(data.chat)?.limit ?? 5;
-      const voiceLimit = readCounter(data.voice)?.limit ?? 5;
+      // (the server's own caps; these are only for a reply that lacks them —
+      // config.PLANS["free"]: 30 messages since the global launch, 5 voice)
+      const chatLimit = readCounter(data.chat)?.limit ?? FREE_DEFAULTS.chat;
+      const voiceLimit = readCounter(data.voice)?.limit ?? FREE_DEFAULTS.voice;
       description = t(
         `Günde ${fmt.num(chatLimit)} mesaj ve ${fmt.num(voiceLimit)} sesli yanıt`,
         `${fmt.num(chatLimit)} messages and ${fmt.num(voiceLimit)} voice replies a day`,

@@ -1,0 +1,128 @@
+{
+  "version": 2,
+  "voice": "marin",
+  "model": "gpt-4o-mini-tts",
+  "generated_at": "2026-10-13T13:00:25+00:00",
+  "clips": {
+    "tr": [
+      "tr-1.mp3",
+      "tr-2.mp3",
+      "tr-3.mp3",
+      "tr-4.mp3",
+      "tr-5.mp3"
+    ],
+    "en": [
+      "en-1.mp3",
+      "en-2.mp3",
+      "en-3.mp3",
+      "en-4.mp3",
+      "en-5.mp3"
+    ],
+    "es": [
+      "es-1.mp3",
+      "es-2.mp3",
+      "es-3.mp3",
+      "es-4.mp3"
+    ],
+    "de": [
+      "de-1.mp3",
+      "de-2.mp3",
+      "de-3.mp3",
+      "de-4.mp3"
+    ],
+    "ru": [
+      "ru-1.mp3",
+      "ru-2.mp3",
+      "ru-3.mp3",
+      "ru-4.mp3"
+    ],
+    "it": [
+      "it-1.mp3",
+      "it-2.mp3",
+      "it-3.mp3",
+      "it-4.mp3"
+    ]
+  },
+  "voices": {
+    "marin": {
+      "tr": [
+        "tr-1.mp3",
+        "tr-2.mp3",
+        "tr-3.mp3",
+        "tr-4.mp3",
+        "tr-5.mp3"
+      ],
+      "en": [
+        "en-1.mp3",
+        "en-2.mp3",
+        "en-3.mp3",
+        "en-4.mp3",
+        "en-5.mp3"
+      ],
+      "es": [
+        "es-1.mp3",
+        "es-2.mp3",
+        "es-3.mp3",
+        "es-4.mp3"
+      ],
+      "de": [
+        "de-1.mp3",
+        "de-2.mp3",
+        "de-3.mp3",
+        "de-4.mp3"
+      ],
+      "ru": [
+        "ru-1.mp3",
+        "ru-2.mp3",
+        "ru-3.mp3",
+        "ru-4.mp3"
+      ],
+      "it": [
+        "it-1.mp3",
+        "it-2.mp3",
+        "it-3.mp3",
+        "it-4.mp3"
+      ]
+    }
+  },
+  "phrases": {
+    "tr": [
+      "Hmm, bakalım.",
+      "Bir saniye, düşünüyorum.",
+      "Hımm, dur bir bakayım.",
+      "Tamam, hemen bakıyorum.",
+      "Hmm, şöyle düşüneyim."
+    ],
+    "en": [
+      "Hmm, let's see.",
+      "One second, let me think.",
+      "Hmm, let me check.",
+      "Okay, give me a moment.",
+      "Hmm, let me think about that."
+    ],
+    "es": [
+      "Mmm, a ver.",
+      "Un segundo, déjame pensar.",
+      "Mmm, déjame ver.",
+      "Vale, dame un momento."
+    ],
+    "de": [
+      "Hmm, mal sehen.",
+      "Einen Moment, ich überlege.",
+      "Hmm, lass mich kurz nachdenken.",
+      "Okay, einen Augenblick."
+    ],
+    "ru": [
+      "Хм, посмотрим.",
+      "Секунду, я подумаю.",
+      "Хм, дай подумать.",
+      "Так, одну минутку."
+    ],
+    "it": [
+      "Mmm, vediamo.",
+      "Un secondo, ci penso.",
+      "Mmm, fammi pensare.",
+      "Ok, dammi un attimo."
+    ]
+  }
+}

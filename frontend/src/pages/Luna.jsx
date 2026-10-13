@@ -19,8 +19,14 @@ import PanelSlot, { lazyPanel } from "@/components/panel/PanelSlot";
 import { randomId, sendStreamedTurn, streamingReply } from "@/lib/streamedTurn";
 import { serverDetail } from "@/lib/errorText";
 import {
+  initialUiLang, initialReplyLang, seedReplyLang, makeT, uiLang, accountLanguage, justCreatedHere,
+} from "@/lib/i18n";
+import { useFeatures } from "@/lib/features";
+import { pendingKind } from "@/lib/chatIntent";
+import { replyExtras } from "@/lib/turnExtras";
+import {
   sendMedia, sendMediaBatch, generateImage, clearMessages, fetchMessages, clearMemories, isPaired, fetchProfile,
-  getReplyLang, setReplyLang, turnResult,
+  updateProfile, getReplyLang, setReplyLang, turnResult,
   generatePdf, generateExcel, generateWord, generatePpt, generateTableImage, generateChart,
 } from "@/lib/api";
 
@@ -52,14 +58,24 @@ const DOC_GEN_CONFIG = {
   chart: { generate: generateChart, ext: "png" },
 };
 
+// Luna greets in the language she answers in (Settings' reply language, or
+// the interface's): a German visitor reads English screens and a German hello.
 const WELCOME_LINES = {
   friend: {
     tr: (name) => `Merhaba${name ? ` ${name}` : ""}! 🌙 Bugün nasılsın, neler konuşalım?`,
     en: (name) => `Hi${name ? ` ${name}` : ""}! 🌙 How are you today — what shall we talk about?`,
+    es: (name) => `¡Hola${name ? ` ${name}` : ""}! 🌙 ¿Cómo estás hoy? ¿De qué hablamos?`,
+    de: (name) => `Hallo${name ? ` ${name}` : ""}! 🌙 Wie geht's dir heute — worüber wollen wir reden?`,
+    ru: (name) => `Привет${name ? `, ${name}` : ""}! 🌙 Как ты сегодня? О чём поговорим?`,
+    it: (name) => `Ciao${name ? ` ${name}` : ""}! 🌙 Come stai oggi? Di cosa parliamo?`,
   },
   work: {
     tr: (name) => `Hoş geldin${name ? `, ${name}` : ""}! 🌙 LunaWorks hazır — görsel, PDF, Excel, Word, ne istersen üretmeye başlayalım.`,
     en: (name) => `Welcome${name ? `, ${name}` : ""}! 🌙 LunaWorks is ready — let's create an image, PDF, Excel, Word, whatever you need.`,
+    es: (name) => `¡Hola${name ? ` ${name}` : ""}! 🌙 LunaWorks está listo: una imagen, un PDF, un Excel, un Word, lo que necesites.`,
+    de: (name) => `Willkommen${name ? `, ${name}` : ""}! 🌙 LunaWorks ist bereit — Bild, PDF, Excel, Word, was immer du brauchst.`,
+    ru: (name) => `Добро пожаловать${name ? `, ${name}` : ""}! 🌙 LunaWorks готов — изображение, PDF, Excel, Word, всё, что нужно.`,
+    it: (name) => `Ciao${name ? ` ${name}` : ""}! 🌙 LunaWorks è pronto: un'immagine, un PDF, un Excel, un Word, tutto ciò che ti serve.`,
   },
 };
 
@@ -83,19 +99,11 @@ function sendSpokenTurn(args, callRef, gen, turnId, signal) {
   });
 }
 
-// What a turn brought besides its text, for the reply bubble
-// (components/ChatMessage.jsx): the pictures / files made in chat and the
-// web pages a searched reply used. (lib/api.js turnResult shapes them.)
-function replyExtras(result) {
-  return {
-    ...(result.attachments.length ? { attachments: result.attachments } : {}),
-    ...(result.sources.length ? { sources: result.sources } : {}),
-  };
-}
-
 function buildWelcomeMessage(mode, lang, name) {
   const key = mode === "work" ? "work" : "friend";
-  const text = WELCOME_LINES[key][lang === "tr" ? "tr" : "en"](name);
+  const lines = WELCOME_LINES[key];
+  // (the browser's language counts before it is kept as the reply language)
+  const text = (lines[getReplyLang() || initialReplyLang(lang) || lang] || lines[uiLang(lang)])(name);
   return { id: "welcome-" + Date.now(), role: "luna", text, mode };
 }
 
@@ -114,7 +122,14 @@ export default function Luna() {
     const saved = localStorage.getItem("luna_mode");
     return saved === "jarvis" ? "friend" : saved || "friend";
   });
-  const [lang, setLang] = useState(() => localStorage.getItem("luna_lang") || "tr");
+  // The interface language, always "tr" or "en" (lib/i18n.js): the saved
+  // one, else the browser's — a first visit from abroad is in English, not
+  // Turkish. Every panel gets this, so none can fall back to Turkish for a
+  // "de". The reply language (Settings; lib/api.js getReplyLang) is apart:
+  // replySeed is the browser's own language when Luna speaks it (read now,
+  // before luna_lang is rewritten), kept below unless one is chosen already.
+  const [lang, setLang] = useState(() => initialUiLang());
+  const [replySeed] = useState(() => initialReplyLang(initialUiLang()));
   // Ruh Halim: only a mood picked TODAY counts (it's sent with each message
   // so Luna can take it into account); yesterday's pick expires on its own.
   const [mood, setMood] = useState(() => {
@@ -146,7 +161,13 @@ export default function Luna() {
   // the mount effect below; null = nothing to accept.
   const [termsProfile, setTermsProfile] = useState(null);
   const [userName, setUserName] = useState("");
-  const t =(tr, en) => (lang === "tr" ? tr : en);
+  const t = makeT(lang);
+  // Which abilities the server has on (GET /api/features, lib/features.js).
+  const features = useFeatures();
+  // What the turn being answered most likely makes ("doc" | "image" | null,
+  // lib/chatIntent.js): the waiting bubble then says so instead of showing
+  // three dots for the minute a researched deck can take.
+  const [making, setMaking] = useState(null);
   // A plan-quota 429 carries a curated reason already translated into the
   // account's language (free plan's daily count, or a paid plan's weekly /
   // 30-day quota) — show it instead of guessing "daily". A rate-limit 429
@@ -162,7 +183,11 @@ export default function Luna() {
   };
 
   useEffect(() => { localStorage.setItem("luna_mode", mode); }, [mode]);
-  useEffect(() => { localStorage.setItem("luna_lang", lang); }, [lang]);
+  useEffect(() => {
+    localStorage.setItem("luna_lang", lang);
+    // (screen readers and the browser's own translate offer read the page's language)
+    document.documentElement.lang = lang;
+  }, [lang]);
   useEffect(() => {
     try {
       if (mood) {
@@ -208,16 +233,37 @@ export default function Luna() {
     let cancelled = false;
     fetchProfile().then((p) => {
       if (cancelled) return;
-      // A reply language other than TR/EN can only come from the Settings
-      // picker (on this or another device) — keep it, instead of letting
-      // this device's interface language overwrite it on the next message.
-      const serverLang = p?.profile?.language;
-      if (!getReplyLang() && serverLang && serverLang !== "tr" && serverLang !== "en") setReplyLang(serverLang);
+      // The account's own language when it has one (lib/i18n.js
+      // accountLanguage): a reply language other than TR/EN (only the
+      // Settings picker sets one), or ANY language of an existing account
+      // signing in on a new browser — a Turkish account on a German or
+      // English browser stays Turkish (screens, replies, the mic) instead
+      // of being moved to the browser's language and having that saved
+      // over its own with the next message. Otherwise the browser's own
+      // language, when Luna speaks it and it isn't TR/EN (seedReplyLang:
+      // never over a choice), and a just-created account saves the
+      // language it starts with right away.
+      const own = accountLanguage(p);
+      if (own) {
+        setReplyLang(own.reply);
+        if (own.ui) setLang(own.ui);
+        // (the greeting already on screen was in the browser's language)
+        setMessages((m) => (m.length === 1 && String(m[0]?.id || "").startsWith("welcome-")
+          ? [buildWelcomeMessage(m[0].mode, own.ui || initialUiLang(), p?.name || "")] : m));
+      } else {
+        const seeded = seedReplyLang(replySeed);
+        const startLang = seeded || getReplyLang() || initialUiLang();
+        if (justCreatedHere(p) && startLang && startLang !== p?.profile?.language) {
+          updateProfile({ language: startLang }).catch(() => {});
+        }
+      }
       if (!p?.terms_current_version) return;
       if (p.terms_accepted_version !== p.terms_current_version) setTermsProfile(p);
-    }).catch(() => {});
+    }).catch(() => {
+      if (!cancelled) seedReplyLang(replySeed);
+    });
     return () => { cancelled = true; };
-  }, []);
+  }, [replySeed]); // (replySeed never changes: this runs once, on mount)
 
   // Indirection so onSpeechResult can call the CURRENT stop() without a
   // circular dependency (the hook below needs onSpeechResult as an input,
@@ -243,7 +289,10 @@ export default function Luna() {
   }, []);
   const onSpeechEnd = useCallback((info) => callRef.current?.handleSpeechEnd(info), []);
 
-  const speech = useSpeechRecognition({ lang, onResult: onSpeechResult, onEnd: onSpeechEnd, autoRestart: false });
+  // It listens in the language you talk to Luna in — her reply language
+  // (Settings, or the browser's own until that is kept), else the
+  // interface's: German replies, German ears.
+  const speech = useSpeechRecognition({ lang: getReplyLang() || replySeed || lang, onResult: onSpeechResult, onEnd: onSpeechEnd, autoRestart: false });
   const { listening, interim, supported, start, stop } = speech;
   sttStopRef.current = stop;
 
@@ -255,6 +304,21 @@ export default function Luna() {
     speech,
     sending,
     sendTurn: (text, opts) => handleSendRef.current(text, { voice: true, turnId: opts?.turnId, signal: opts?.signal }),
+    // An HD (speech-to-speech) call stores its turns in this thread on the
+    // server; each finished one also shows in the chat behind the call
+    // screen, as a classic call's turns do.
+    conversationId,
+    // (`actions`: what her tools did in the call — a reminder, a note — shown
+    // as the reply's cards, even when she said nothing more about it.)
+    onTranscriptTurn: ({ role, text, actions } = {}) => {
+      const said = typeof text === "string" ? text.trim() : "";
+      const cards = role === "assistant" && Array.isArray(actions) && actions.length ? actions : null;
+      if ((!said && !cards) || (role !== "user" && role !== "assistant")) return;
+      const id = `${role === "user" ? "u" : "l"}-rt-${randomId()}`;
+      setMessages((m) => [...m, {
+        id, role: role === "user" ? "user" : "luna", text: said, mode, ...(cards ? { actions: cards } : {}),
+      }]);
+    },
   });
   callRef.current = call;
 
@@ -330,6 +394,9 @@ export default function Luna() {
     const optimistic = { id: "u-" + Date.now(), role: "user", text: content, mode };
     setMessages((m) => [...m, optimistic]);
     setSending(true);
+    // (a typed "X hakkında sunum hazırla" / "bir kedi çiz": the waiting
+    // bubble says a file / picture is being made — never in the call)
+    setMaking(voice ? null : pendingKind(content, features));
     // Which call (if any) this turn belongs to — a reply is only spoken in
     // the same call it was asked in.
     const callGen = callRef.current?.generation();
@@ -404,18 +471,25 @@ export default function Luna() {
       }
       // The server's own reason when it gives one (too long, not allowed,
       // a plan limit — lib/errorText.js), else the in-character message.
+      // A plan's limit (the free plan's 30 messages a day, a paid plan's
+      // quota — a 429 without Retry-After) offers the plans right there
+      // while paid plans are on sale.
+      const planLimit = e?.response?.status === 429 && !e.response.headers?.["retry-after"];
       toast.error(
         quotaMessage(e) || serverDetail(e) || t(
           "🌙 Şu an sana cevap verirken küçük bir sorun yaşadım. Biraz sonra tekrar deneyelim.",
           "🌙 I ran into a small problem answering you just now. Let's try again in a bit."
         ),
-        { duration: 6000 }
+        planLimit && features.sales
+          ? { duration: 10000, action: { label: t("Planları gör", "See plans"), onClick: () => setPremiumOpen(true) } }
+          : { duration: 6000 }
       );
     } finally {
       setSending(false);
+      setMaking(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, sending, mode, lang, conversationId, mood]);
+  }, [input, sending, mode, lang, conversationId, mood, features]);
   handleSendRef.current = handleSend;
 
   // Same optimistic-bubble/error-handling shape as handleSend above, for an
@@ -650,9 +724,11 @@ export default function Luna() {
           onSendMedia={handleSendMedia}
           onSendMediaBatch={handleSendMediaBatch}
           onGenerateImage={handleGenerateImage}
-          generatingImage={generatingImage}
+          // (also while a typed turn makes a picture / a file in chat — the
+          // waiting bubble's "Görsel çiziliyor..." / "Oluşturuluyor...")
+          generatingImage={generatingImage || (sending && making === "image")}
           onGenerateDoc={handleGenerateDoc}
-          generatingDoc={generatingDoc}
+          generatingDoc={generatingDoc || (sending && making === "doc")}
           onToggleMic={toggleMic}
           onOpenCall={call.open}
           workMode={mode === "work"}

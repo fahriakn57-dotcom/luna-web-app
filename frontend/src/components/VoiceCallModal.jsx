@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Keyboard, PhoneOff, Mic, ArrowUp, Square, Play, RotateCcw } from "lucide-react";
+import { Keyboard, PhoneOff, Mic, MicOff, ArrowUp, Square, Play, RotateCcw } from "lucide-react";
 import MoonCanvas from "@/components/voice/MoonCanvas";
 import CrisisCard from "@/components/CrisisCard";
 import lunaLogo from "@/assets/luna-logo.webp";
@@ -12,7 +12,10 @@ import { haptics } from "@/lib/haptics";
 // The conversation logic (hands-free turns, playback, closing) lives in
 // hooks/useVoiceCall.js — this component only shows it.
 //
-// state: idle | listening | thinking | speaking | paused | readout | error
+// state: idle | listening | thinking | speaking | paused | readout | error,
+// and in an HD call (realtime: true — lib/realtimeCall.js) also connecting
+// and muted. In an HD call the main button mutes / unmutes your mic and cuts
+// in while she speaks; there are no turns to send and no hands-free switch.
 
 function formatTime(sec) {
   const m = Math.floor(sec / 60).toString().padStart(2, "0");
@@ -117,8 +120,12 @@ export default function VoiceCallModal({
   lang, state, capturing, interim, pendingText, speechError, supported = true, lastSent, replyText, canSkipVoice = false,
   voiceFailedMessage, turnFailed = false, canReplay, handsFree, autoPaused, coach, speechProgress, analyser,
   flareKey, exiting, onMainAction, onTalkInstead, onReplay, onToggleHandsFree, onClose, safety = null,
+  realtime = false, muted = false, notice = "", realtimeSafety = null,
 }) {
   const t = (tr, en) => (lang === "tr" ? tr : en);
+  // A flagged message said in this call: the card Luna.jsx keeps for a
+  // classic turn, else the one the server sent for an HD call's transcript.
+  const shownSafety = safety?.kind ? safety : realtimeSafety?.kind ? realtimeSafety : null;
   const startedAt = useRef(Date.now());
   const [elapsed, setElapsed] = useState(0);
   const [micSlow, setMicSlow] = useState(false);
@@ -187,7 +194,9 @@ export default function VoiceCallModal({
     haptics.doubleTick();
   }, [flareKey]);
 
-  const idleHint = autoPaused
+  const idleHint = notice
+    ? notice
+    : autoPaused
     ? t("Buradayım. Hazır olduğunda dokun.", "I'm here. Tap when you're ready.")
     : coach
     ? t("Konuş; sustuğunda Luna cevap verir. Sözünü kesmek için dokunabilirsin.", "Just talk; Luna answers when you pause. Tap to interrupt her.")
@@ -197,12 +206,30 @@ export default function VoiceCallModal({
 
   const copy = {
     idle: { title: t("Seni dinlemeye hazırım", "Ready when you are"), hint: idleHint, action: t("Konuş", "Talk") },
-    listening: {
-      title: micOpen ? t("Dinliyorum", "Listening") : t("Mikrofon açılıyor", "Opening the mic"),
-      hint: coach
-        ? t("Sözünü bitirince kısa bir sessizlik yeter.", "When you're done, just pause for a moment.")
-        : t("Sözünü bitirdiğinde Luna cevap verir.", "Luna answers when you finish."),
-      action: heard ? t("Gönder", "Send") : t("Durdur", "Stop"),
+    listening: realtime
+      ? {
+          title: t("Dinliyorum", "Listening"),
+          hint: coach
+            ? t("Konuş; sustuğunda Luna cevap verir. Araya girmek için konuşman yeter.", "Just talk; Luna answers when you pause. To cut in, simply start talking.")
+            : t("Sözünü bitirdiğinde Luna cevap verir.", "Luna answers when you finish."),
+          action: t("Sessize al", "Mute"),
+        }
+      : {
+          title: micOpen ? t("Dinliyorum", "Listening") : t("Mikrofon açılıyor", "Opening the mic"),
+          hint: coach
+            ? t("Sözünü bitirince kısa bir sessizlik yeter.", "When you're done, just pause for a moment.")
+            : t("Sözünü bitirdiğinde Luna cevap verir.", "Luna answers when you finish."),
+          action: heard ? t("Gönder", "Send") : t("Durdur", "Stop"),
+        },
+    connecting: {
+      title: t("Bağlanıyor", "Connecting"),
+      hint: t("HD sesli görüşme hazırlanıyor…", "Setting up your HD voice call…"),
+      action: t("Bekle", "Wait"),
+    },
+    muted: {
+      title: t("Mikrofonun kapalı", "Your mic is off"),
+      hint: t("Konuşmak için mikrofonu aç.", "Turn your mic back on to talk."),
+      action: t("Mikrofonu aç", "Unmute"),
     },
     thinking: canSkipVoice
       ? { title: t("Düşünüyorum", "Thinking"), hint: "", action: t("Yazılı göster", "Show as text") }
@@ -287,7 +314,9 @@ export default function VoiceCallModal({
   // read aloud into the open mic.
   const mainAriaLabel = {
     idle: t("Konuşmaya başla", "Start talking"),
-    listening: t("Konuşmayı bitir", "Finish talking"),
+    listening: realtime ? t("Mikrofonu kapat", "Mute the microphone") : t("Konuşmayı bitir", "Finish talking"),
+    connecting: t("Görüşme bağlanıyor", "The call is connecting"),
+    muted: t("Mikrofonu aç", "Unmute the microphone"),
     thinking: canSkipVoice ? t("Sesi bekleme, cevabı yazılı göster", "Don't wait for the voice, show the answer as text") : t("Luna düşünüyor", "Luna is thinking"),
     speaking: t("Luna'nın sözünü kes ve konuş", "Interrupt Luna and talk"),
     paused: t("Luna'yı kaldığı yerden devam ettir", "Resume Luna"),
@@ -297,26 +326,33 @@ export default function VoiceCallModal({
 
   // Screen readers: announce only what isn't being heard anyway — never
   // read over Luna's voice or into the open mic.
-  const liveText = state === "thinking" ? copy.title
-    : state === "error" || state === "paused" ? `${copy.title}. ${copy.hint}`
+  const liveText = state === "thinking" || state === "connecting" ? copy.title
+    : state === "error" || state === "paused" || state === "muted" ? `${copy.title}. ${copy.hint}`
     : state === "readout" ? (turnFailed ? `${copy.title}. ${voiceFailedMessage}` : `${voiceFailedMessage} ${toSpoken(replyText)}`)
+    : state === "idle" && notice ? notice
     : "";
 
-  const mainDisabled = (state === "thinking" && !canSkipVoice) || !supported;
+  const mainDisabled = (state === "thinking" && !canSkipVoice) || state === "connecting" || !supported;
   const mainStyle = {
     idle: "bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_10px_40px_-6px_rgba(167,139,250,0.75)]",
     listening: "bg-[#eef3ff] text-indigo-800 shadow-[0_0_0_8px_rgba(207,224,255,0.14),0_10px_40px_-6px_rgba(207,224,255,0.6)]",
+    connecting: "bg-white/[0.06] border border-white/10 text-white/40",
+    muted: "bg-white/[0.08] border border-white/20 text-white/80",
     speaking: "bg-white/[0.1] border border-white/25 text-white backdrop-blur-md",
     paused: "bg-[#f1ecff] text-violet-800 shadow-[0_10px_40px_-6px_rgba(196,181,253,0.6)]",
     readout: "bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_10px_40px_-6px_rgba(167,139,250,0.75)]",
     thinking: "bg-white/[0.06] border border-white/10 text-white/40",
     error: "bg-white/[0.08] border border-white/20 text-white/80",
   }[state];
-  const MainIcon = state === "listening" ? (heard ? ArrowUp : Square) : state === "paused" ? Play : Mic;
+  // (an HD call's button mutes while you can talk: it shows the muted mic)
+  const rtListening = realtime && state === "listening";
+  const MainIcon = rtListening ? MicOff
+    : state === "listening" ? (heard ? ArrowUp : Square) : state === "paused" ? Play : Mic;
   // The turn is about to be sent (you paused after speaking): a ring drains
   // around the button; talking again restarts it.
-  const endpointing = state === "listening" && !!pendingText && !interim;
-  const sceneState = state === "readout" ? "idle" : state;
+  const endpointing = !realtime && state === "listening" && !!pendingText && !interim;
+  const sceneState = state === "readout" || state === "muted" ? "idle" : state === "connecting" ? "thinking" : state;
+  const iconFilled = !rtListening && (state === "paused" || (state === "listening" && !heard));
   const showAfterglow = state === "idle" && canReplay && !!replyText;
 
   return (
@@ -324,7 +360,8 @@ export default function VoiceCallModal({
     // controls stay reachable by scrolling instead of being cut off.
     <div className={`fixed inset-0 z-[100] flex flex-col overflow-y-auto overflow-x-hidden bg-[#070613] text-white ${exiting ? "call-exit pointer-events-none" : ""}`}
       role="dialog" aria-modal="true" aria-label={t("Luna ile sesli görüşme", "Voice call with Luna")}
-      data-testid="voice-call-modal" data-call-state={state}>
+      data-testid="voice-call-modal" data-call-state={state} data-call-mode={realtime ? "hd" : "classic"}
+      data-muted={muted ? "true" : undefined}>
       {/* The same sky as the chat screen, deeper: Luna rises as a moon above
           the glowing planet horizon. Its colour follows the call — cooler
           while it's your turn, warmer while Luna speaks (index.css). */}
@@ -342,13 +379,22 @@ export default function VoiceCallModal({
           <span className="text-[15px] font-semibold text-white/90">Luna</span>
         </span>
         <span className="flex items-center gap-3">
-          <button type="button" onClick={onToggleHandsFree} aria-pressed={handsFree} data-testid="voice-call-handsfree-toggle"
-            title={t("Luna konuşmayı bitirince mikrofon kendiliğinden açılsın", "Reopen the mic automatically when Luna finishes")}
-            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${
-              handsFree ? "border-indigo-300/40 bg-indigo-400/15 text-indigo-100" : "border-white/15 text-white/50 hover:text-white/80"}`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${handsFree ? "bg-indigo-200" : "bg-white/30"}`} aria-hidden="true" />
-            {t("Eller serbest", "Hands-free")}
-          </button>
+          {realtime ? (
+            // An HD call is always hands-free: the server hears when you start and stop.
+            <span data-testid="voice-call-hd-badge" title={t("HD sesli görüşme", "HD voice call")}
+              className="flex items-center gap-1.5 rounded-full border border-violet-300/40 bg-violet-400/15 px-2.5 py-1 text-xs text-violet-100">
+              <span className="h-1.5 w-1.5 rounded-full bg-violet-200" aria-hidden="true" />
+              HD
+            </span>
+          ) : (
+            <button type="button" onClick={onToggleHandsFree} aria-pressed={handsFree} data-testid="voice-call-handsfree-toggle"
+              title={t("Luna konuşmayı bitirince mikrofon kendiliğinden açılsın", "Reopen the mic automatically when Luna finishes")}
+              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${
+                handsFree ? "border-indigo-300/40 bg-indigo-400/15 text-indigo-100" : "border-white/15 text-white/50 hover:text-white/80"}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${handsFree ? "bg-indigo-200" : "bg-white/30"}`} aria-hidden="true" />
+              {t("Eller serbest", "Hands-free")}
+            </button>
+          )}
           <span className="text-[13px] tabular-nums text-white/50" aria-label={t("Görüşme süresi", "Call duration")}>
             {formatTime(elapsed)}
           </span>
@@ -356,10 +402,13 @@ export default function VoiceCallModal({
       </header>
 
       {/* A flagged message in this call (backend services/safety.py): the
-          emergency numbers stay on screen until the call ends. */}
-      {safety?.kind && (
+          emergency numbers stay on screen until the call ends — the user's
+          own country's, as the server sent them with the turn or the HD
+          session's transcript answer (never a guess from the interface
+          language). */}
+      {shownSafety && (
         <div className="relative mx-auto mt-3 w-full max-w-md shrink-0 px-5">
-          <CrisisCard kind={safety.kind} lang={lang} compact />
+          <CrisisCard kind={shownSafety.kind} resources={shownSafety.resources} lang={lang} compact />
         </div>
       )}
 
@@ -427,7 +476,7 @@ export default function VoiceCallModal({
           aria-disabled={mainDisabled} aria-label={mainAriaLabel} data-testid="voice-call-mic-button"
           className="group flex w-[96px] flex-col items-center gap-2 focus:outline-none aria-disabled:cursor-not-allowed">
           <span className={`relative flex h-[76px] w-[76px] items-center justify-center rounded-full transition-all duration-300 group-focus-visible:ring-2 group-focus-visible:ring-violet-200 group-focus-visible:ring-offset-4 group-focus-visible:ring-offset-[#070613] ${mainDisabled ? "" : "group-active:scale-95"} ${mainStyle}`}>
-            {state === "thinking" && (
+            {(state === "thinking" || state === "connecting") && (
               <span className="call-spin absolute inset-[-3px] rounded-full border-2 border-transparent border-t-violet-300/80" aria-hidden="true" />
             )}
             {endpointing && (
@@ -435,9 +484,9 @@ export default function VoiceCallModal({
                 <circle cx="44" cy="44" r="42" fill="none" stroke="rgba(207,224,255,0.7)" strokeWidth="2" strokeLinecap="round" pathLength="100" />
               </svg>
             )}
-            <MainIcon size={state === "listening" && !heard ? 22 : 28}
-              fill={state === "paused" || (state === "listening" && !heard) ? "currentColor" : "none"}
-              strokeWidth={state === "listening" && !heard ? 0 : state === "speaking" ? 2 : 2.2} />
+            <MainIcon size={!rtListening && state === "listening" && !heard ? 22 : 28}
+              fill={iconFilled ? "currentColor" : "none"}
+              strokeWidth={!rtListening && state === "listening" && !heard ? 0 : state === "speaking" ? 2 : 2.2} />
           </span>
           <span className="text-xs font-medium text-white/75" aria-hidden="true">{copy.action}</span>
         </button>

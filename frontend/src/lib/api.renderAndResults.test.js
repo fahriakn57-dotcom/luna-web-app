@@ -182,7 +182,21 @@ describe("streamChat results", () => {
 
 describe("turnResult", () => {
   test("a plain reply string (an older caller or server)", () => {
-    expect(api.turnResult("Selam")).toEqual({ reply: "Selam", messageId: null, sources: [], attachments: [], safety: null, degraded: false });
+    expect(api.turnResult("Selam")).toEqual({ reply: "Selam", messageId: null, sources: [], attachments: [], actions: [], safety: null, degraded: false });
+  });
+
+  test("what Luna did in the account (agent actions): objects with a type, at most 10, copied", () => {
+    const reminder = {
+      type: "reminder_created", id: "r1", summary: "Yarın 09:00 — Annemi ara", text: "Annemi ara",
+      due_at: "2026-10-14T06:00:00Z", timezone: "Europe/Istanbul", recurrence: "none",
+      calendar: { google_url: "https://calendar.google.com/calendar/render?action=TEMPLATE", ics_url: "/api/reminders/r1.ics" },
+    };
+    const r = api.turnResult({ reply: "Tamam, hatırlatacağım.", actions: [reminder, null, "x", { id: "no-type" }, { type: "Bad Type" }] });
+    expect(r.actions).toEqual([reminder]);
+    expect(r.actions[0]).not.toBe(reminder);
+    const many = Array.from({ length: 14 }, (_, i) => ({ type: "note_created", id: `n${i}` }));
+    expect(api.turnResult({ reply: "x", actions: many }).actions).toHaveLength(10);
+    expect(api.turnResult({ reply: "x" }).actions).toEqual([]);
   });
 
   test("a picture answered without attachments still shows from image_base64", () => {
@@ -234,6 +248,35 @@ describe("media, history, files, gallery", () => {
     const [luna, user] = await api.fetchMessages("friend");
     expect(luna.sources).toEqual([{ title: "AA", url: "https://aa.com.tr/x", domain: "aa.com.tr" }]);
     expect(user.sources).toBeUndefined();
+  });
+
+  test("fetchMessages keeps what Luna did that turn (meta.agent_actions)", async () => {
+    axios.get.mockResolvedValue({ data: { messages: [
+      { id: "a2", sender: "assistant", content: "Not aldım.", created_at: "2026-10-13T10:00:00Z",
+        meta: { agent_actions: [{ type: "note_created", id: "n1", summary: "Market listesi" }] } },
+      { id: "a3", sender: "assistant", content: "Selam", created_at: "2026-10-13T10:01:00Z", meta: {} },
+    ] } });
+    const [withAction, plain] = await api.fetchMessages("friend");
+    expect(withAction.actions).toEqual([{ type: "note_created", id: "n1", summary: "Market listesi" }]);
+    expect(plain.actions).toBeUndefined();
+  });
+
+  test("fetchMessages keeps a flagged reply's help lines for the user's country (meta.safety_resources)", async () => {
+    const us = [{ label: "Acil yardım", label_en: "Emergency", phone: "911" }, { label: "988", label_en: "988", phone: "988" }];
+    axios.get.mockResolvedValue({ data: { messages: [
+      { id: "a4", sender: "assistant", content: "Yanındayım.", created_at: "2026-10-13T10:00:00Z",
+        meta: { safety: "self_harm", safety_resources: us, safety_country: "US" } },
+      { id: "a5", sender: "assistant", content: "Yanındayım.", created_at: "2026-10-13T10:01:00Z", meta: { safety: "abuse" } },
+      { id: "a6", sender: "assistant", content: "Selam", created_at: "2026-10-13T10:02:00Z", meta: {} },
+    ] } });
+    const [withLines, olderServer, plain] = await api.fetchMessages("friend");
+    expect(withLines.safety).toEqual({ kind: "self_harm", resources: us, country: "US" });
+    // (an older server: only the kind — the card then goes by the device's zone, lib/crisis.js)
+    expect(olderServer.safety).toEqual({ kind: "abuse" });
+    expect(plain.safety).toBeUndefined();
+    expect(api.historySafety({ safety: { kind: "abuse", resources: us } })).toEqual({ kind: "abuse", resources: us });
+    expect(api.historySafety({ safety: 3 })).toBeUndefined();
+    expect(api.historySafety(undefined)).toBeUndefined();
   });
 
   test("fetchMessageFile asks this API only, with the device's auth", async () => {

@@ -315,7 +315,8 @@ export default function FriendPanel({
             {messages.map((m) => (
               <Fragment key={m.id}>
                 <ChatMessage msg={m} lang={lang} />
-                {m.safety && <CrisisCard kind={m.safety.kind} lang={lang} />}
+                {/* (resources: the user's own country's help lines, sent with the reply) */}
+                {m.safety && <CrisisCard kind={m.safety.kind} resources={m.safety.resources} lang={lang} />}
               </Fragment>
             ))}
             {onlyWelcome && !busy && (

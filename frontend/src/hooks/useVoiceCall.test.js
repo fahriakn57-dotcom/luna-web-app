@@ -86,9 +86,13 @@ beforeAll(() => {
   window.HTMLMediaElement.prototype.load = function load() {};
   URL.createObjectURL = () => "blob:silent";
   URL.revokeObjectURL = () => {};
-  // Her "hmm" clips. (A plain function: CRA's Jest resets every jest.fn()
-  // before each test.)
-  globalThis.fetch = async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) });
+  // Her "hmm" clips, and the manifest saying which voice they are in
+  // (lib/voiceFiller.js plays only clips in her voice). (A plain function:
+  // CRA's Jest resets every jest.fn() before each test.)
+  const manifest = { version: 2, voice: "marin", clips: { tr: ["tr-1.mp3", "tr-2.mp3"], en: ["en-1.mp3"] } };
+  globalThis.fetch = async (url) => (String(url).endsWith("manifest.json")
+    ? { ok: true, json: async () => manifest }
+    : { ok: true, arrayBuffer: async () => new ArrayBuffer(8) });
 });
 
 // The recognizer, as useSpeechRecognition reports it. stop() works like the

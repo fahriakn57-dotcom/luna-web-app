@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   User, Smartphone, Languages, Mail, ShieldCheck, Scale, MessageSquareX, Brain, UserX, LogOut, Check,
-  ChevronDown, Loader2,
+  ChevronDown, Loader2, MapPin,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
@@ -10,6 +10,8 @@ import { accountDeletionBody, consentWithdrawalBody } from "@/lib/legalCopy";
 import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
 import { fetchProfile, updateProfile, signOut, deleteAccount, getReplyLang, setReplyLang } from "@/lib/api";
 import { LANGUAGES, langLabel } from "@/lib/languages";
+import { countryName, countryOptions } from "@/lib/countries";
+import { makeT } from "@/lib/i18n";
 import { locale } from "@/lib/dates";
 import { GlyphTile } from "@/components/icons/GlyphTile";
 import {
@@ -120,9 +122,11 @@ function SettingsSkeleton({ label }) {
 export default function SettingsPanel({
   lang, setLang, paired, onOpenPair, onClearChat, onClearMemories, onClose,
 }) {
-  const t = (tr, en) => (lang === "tr" ? tr : en);
+  const t = makeT(lang);
   const titleId = usePanelTitleId();
   const nameId = useId();
+  const countrySelectId = useId();
+  const countryDescId = useId();
   const backupSwitchId = useId();
   const backupDescId = useId();
   const consentSwitchId = useId();
@@ -141,6 +145,13 @@ export default function SettingsPanel({
   const [backupSaving, setBackupSaving] = useState(false);
   const [specialConsent, setSpecialConsent] = useState(false);
   const [consentSaving, setConsentSaving] = useState(false);
+  // Where you are (profile.country / locale_source, backend
+  // services/user_locale.py): "auto" follows this device's time zone,
+  // "user" is a country picked here.
+  const [country, setCountry] = useState("");
+  const [localeSource, setLocaleSource] = useState("auto");
+  const [countrySaving, setCountrySaving] = useState(false);
+  const countries = useMemo(() => countryOptions(lang), [lang]);
   // Which confirmation is open: "consent" (withdrawing the special-category
   // consent) | "chat" | "memories" | "account" | null.
   const [confirming, setConfirming] = useState(null);
@@ -185,6 +196,8 @@ export default function SettingsPanel({
       setEmailVerified(!!p.email_verified);
       setBackupEnabled(!!p.backup_email_enabled);
       setSpecialConsent(!!p.special_data_consent);
+      setCountry(p.profile?.country || "");
+      setLocaleSource(p.profile?.locale_source === "user" ? "user" : "auto");
       setStatus("ready");
     } catch {
       setStatus("error");
@@ -323,6 +336,28 @@ export default function SettingsPanel({
       toast.error(apiError(e, t("Yedekleme ayarı kaydedilemedi. Tekrar dene.", "Couldn't save the backup setting. Try again.")));
     } finally {
       setBackupSaving(false);
+    }
+  };
+
+  // A country picked here sticks (the device's time zone no longer changes
+  // it); "auto" hands it back to the time zone. Optimistic, rolled back to
+  // what the server last said when the save fails.
+  const changeCountry = async (value) => {
+    const before = { country, localeSource };
+    const auto = value === "auto";
+    setCountry(auto ? country : value);
+    setLocaleSource(auto ? "auto" : "user");
+    setCountrySaving(true);
+    try {
+      const p = await updateProfile(auto ? { timezone: "", country: "" } : { country: value });
+      setCountry(p?.profile?.country || "");
+      setLocaleSource(p?.profile?.locale_source === "user" ? "user" : "auto");
+    } catch (e) {
+      setCountry(before.country);
+      setLocaleSource(before.localeSource);
+      toast.error(apiError(e, t("Ülke kaydedilemedi. Tekrar dene.", "Couldn't save the country. Try again.")));
+    } finally {
+      setCountrySaving(false);
     }
   };
 
@@ -582,6 +617,33 @@ export default function SettingsPanel({
                     </div>
                   )}
                 </div>
+
+                <SettingRow
+                  icon={MapPin}
+                  hue="indigo"
+                  title={t("Ülke", "Country")}
+                  titleFor={countrySelectId}
+                  descriptionId={countryDescId}
+                  description={t(
+                    "Web aramaları, cevaplardaki saat ve yardım hatları buna göre ayarlanır. Otomatik: cihazının saat diliminden.",
+                    "Web searches, the time in replies and help lines follow it. Automatic: from your device's time zone."
+                  )}
+                  stack
+                >
+                  <select id={countrySelectId} value={localeSource === "user" && country ? country : "auto"}
+                    onChange={(e) => changeCountry(e.target.value)} disabled={countrySaving}
+                    aria-describedby={countryDescId} data-testid="settings-country-select"
+                    className="w-full sm:w-auto sm:min-w-[160px] sm:max-w-[220px] rounded-xl min-h-[40px] pl-3 pr-8 text-sm font-medium text-white border border-white/10 bg-[#140f24] transition-colors hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/60 disabled:opacity-60">
+                    <option value="auto">
+                      {localeSource !== "user" && country
+                        ? `${t("Otomatik", "Automatic")} · ${countryName(country, lang)}`
+                        : t("Otomatik", "Automatic")}
+                    </option>
+                    {countries.map((c) => (
+                      <option key={c.code} value={c.code}>{c.name}</option>
+                    ))}
+                  </select>
+                </SettingRow>
 
                 <SettingRow
                   icon={Mail}

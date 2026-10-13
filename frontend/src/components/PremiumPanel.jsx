@@ -6,22 +6,19 @@ import { GlowIcon } from "@/components/icons/GlyphTile";
 import { fetchSubscription, selectPlan, checkoutSubscription, cancelSubscription, fetchProfile, SALES_DOCS_VERSION } from "@/lib/api";
 import CheckoutModal from "@/components/CheckoutModal";
 import LegalLink, { LEGAL_URLS } from "@/components/LegalLink";
+import { formatPlanPrice as formatPrice, planFeatures } from "@/lib/plans";
+import { makeT } from "@/lib/i18n";
 
 // 2026-09-27: PayTR only needs these five (no TC Kimlik No / city — those
 // were an iyzico-specific fraud-check requirement, see git history).
 const EMPTY_BILLING = { name: "", surname: "", email: "", phone: "", address: "" };
 
-// Turkish price format: 199.9 -> "₺199,90" (a raw JS number would render
-// "₺199.9"). A free plan (price_try 0) is just "₺0". Plans without a TRY
-// price fall back to the old USD display.
-function formatPlanPrice(plan) {
-  if (plan.price_try == null) return `$${plan.price_usd}`;
-  if (plan.price_try === 0) return "₺0";
-  return `₺${Number(plan.price_try).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 export default function PremiumPanel({ lang, onClose }) {
-  const t = (tr, en) => (lang === "tr" ? tr : en);
+  const t = makeT(lang);
+  // The price and feature lines in the interface language (lib/plans.js:
+  // the server's features_en on an English screen; "Günde 30 mesaj" /
+  // "30 messages a day" follow its config).
+  const formatPlanPrice = (plan) => formatPrice(plan, lang);
   const [catalog, setCatalog] = useState([]);
   const [current, setCurrent] = useState({ plan: "free", status: "active" });
   const [loading, setLoading] = useState(true);
@@ -199,8 +196,8 @@ export default function PremiumPanel({ lang, onClose }) {
                     <p className="text-[10px] text-white/45">{t("(tüm vergiler dahil)", "(all taxes included)")}</p>
                   </div>
                 </div>
-                {selectedPlan.features?.length > 0 && (
-                  <p className="text-[10px] text-white/50 leading-snug mt-2">{selectedPlan.features.join(" · ")}</p>
+                {planFeatures(selectedPlan, lang).length > 0 && (
+                  <p className="text-[10px] text-white/50 leading-snug mt-2">{planFeatures(selectedPlan, lang).join(" · ")}</p>
                 )}
                 <p className="text-[11px] text-white/60 leading-snug mt-2.5">
                   {t("Belirsiz süreli abonelik; her ay otomatik yenilenir, dilediğin zaman uygulamadan iptal edebilirsin.",
@@ -277,7 +274,7 @@ export default function PremiumPanel({ lang, onClose }) {
                       {(plan.price_try ?? plan.price_usd) > 0 && <span className="text-xs text-white/40 mb-1">/{t("ay", "mo")}</span>}
                     </div>
                     <ul className="space-y-2 mb-5 flex-1">
-                      {plan.features.map((f) => (
+                      {planFeatures(plan, lang).map((f) => (
                         <li key={f} className="flex items-start gap-2 text-xs text-white/70">
                           <GlowIcon icon={Check} hue="emerald" size={14} className="mt-px" /> {f}
                         </li>

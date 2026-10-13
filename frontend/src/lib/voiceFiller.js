@@ -5,6 +5,16 @@ import { contextAlwaysAudible, voiceContext } from "@/lib/voiceAudio";
 // said while a spoken turn's reply is still on its way, so the wait before
 // her first word isn't dead silence (hooks/useVoiceCall.js decides when).
 //
+// ONLY clips in the voice she is speaking with are ever played: the clips
+// and public/voice/fillers/manifest.json are made by
+// backend/scripts/generate_filler_clips.py with her real voice, and the
+// manifest says which voice each set is in. setFillerVoice(voice) tells this
+// module her current voice (the server's /api/voice/realtime/status says it;
+// unknown = the manifest's default voice, the one every user who never
+// picked a voice hears). No manifest, or no clips in her voice: no filler —
+// a "hmm" in another voice is worse than a short silence (until 2026-10-13
+// the clips were the old provider's voice).
+//
 // They play straight through the shared audio context (lib/voiceAudio.js,
 // started inside the tap that opened the call) — never through her reply's
 // <audio> element, so the reply's playback is untouched and iOS needs no
@@ -13,13 +23,53 @@ import { contextAlwaysAudible, voiceContext } from "@/lib/voiceAudio";
 // ring/silent switch mutes the context (lib/voiceAudio.js) — the "hmm" would
 // be silent while her first word still waited for it.
 
-const CLIP_COUNT = { tr: 4, en: 5 }; // public/voice/fillers/<lang>-<n>.mp3
 const FADE_S = 0.06;                 // a filler cut short fades out instead of clicking
 const LOAD_TIMEOUT_MS = 15000;       // a clip stuck loading counts as failed (the next call tries again)
+const MAX_CLIPS = 8;                 // per voice and language
+const CLIP_PATH = /^(?:[a-z0-9_-]+\/)?[a-z0-9_-]+\.mp3$/i; // "tr-1.mp3", "coral/tr-1.mp3"
 
-// Decoded clips per language, kept for the page session.
+const base = () => `${process.env.PUBLIC_URL || ""}/voice/fillers/`;
+
+// Her voice now (null: the manifest's default voice).
+let fillerVoice = null;
+
+export function setFillerVoice(voice) {
+  fillerVoice = typeof voice === "string" && /^[a-z0-9_-]{1,32}$/i.test(voice) ? voice.toLowerCase() : null;
+}
+
+// The manifest's clips for `voice` (null: its default voice) in `lang` —
+// relative paths, at most MAX_CLIPS; [] when it has none (or isn't one).
+export function fillerClipsFor(manifest, voice, lang) {
+  if (!manifest || typeof manifest !== "object") return [];
+  const def = typeof manifest.voice === "string" ? manifest.voice : null;
+  const want = voice || def;
+  if (!want) return [];
+  let list = null;
+  if (want === def && manifest.clips && typeof manifest.clips === "object") list = manifest.clips[lang];
+  if (!Array.isArray(list) && manifest.voices && typeof manifest.voices === "object") list = manifest.voices[want]?.[lang];
+  if (!Array.isArray(list)) return [];
+  return list.filter((p) => typeof p === "string" && CLIP_PATH.test(p)).slice(0, MAX_CLIPS);
+}
+
+// The manifest, fetched once per page session (again after a failure).
+let manifestLoad = null;
+function loadManifest() {
+  if (!manifestLoad) {
+    manifestLoad = fetch(`${base()}manifest.json`, { cache: "no-cache" })
+      .then((res) => (res && res.ok ? res.json() : null))
+      .catch(() => null)
+      .then((m) => {
+        if (!m) manifestLoad = null;
+        return m;
+      });
+  }
+  return manifestLoad;
+}
+
+// Decoded clips per voice and language, kept for the page session.
 const decoded = new Map();
 const loading = new Set();
+const keyFor = (lang) => `${fillerVoice || "default"}|${lang}`;
 
 const now = () => (window.performance?.now ? window.performance.now() : Date.now());
 
@@ -51,20 +101,27 @@ function loadClip(ctx, url) {
   return Promise.race([load, timeout]).finally(() => clearTimeout(timer));
 }
 
-// Fetch and decode the clips of a language (when the call opens). A clip
-// that fails is left out; if none loaded, the next call tries again.
+// Fetch and decode the clips of a language in her current voice (when the
+// call opens). A clip that fails is left out; if none loaded, the next call
+// tries again.
 export function preloadFillers(lang) {
-  const count = CLIP_COUNT[lang];
   const ctx = voiceContext();
-  if (!count || !ctx || !contextAlwaysAudible() || decoded.has(lang) || loading.has(lang)) return;
-  loading.add(lang);
-  const base = `${process.env.PUBLIC_URL || ""}/voice/fillers/${lang}-`;
-  const clips = Array.from({ length: count }, (_, i) => loadClip(ctx, `${base}${i + 1}.mp3`).catch(() => null));
-  Promise.all(clips).then((list) => {
-    loading.delete(lang);
-    const ok = list.filter(Boolean);
-    if (ok.length) decoded.set(lang, ok);
-  });
+  const key = keyFor(lang);
+  if (!lang || !ctx || !contextAlwaysAudible() || decoded.has(key) || loading.has(key)) return;
+  loading.add(key);
+  const voice = fillerVoice;
+  loadManifest()
+    .then((manifest) => {
+      const paths = fillerClipsFor(manifest, voice, lang);
+      if (!paths.length) return [];
+      return Promise.all(paths.map((p) => loadClip(ctx, `${base()}${p}`).catch(() => null)));
+    })
+    .catch(() => [])
+    .then((list) => {
+      loading.delete(key);
+      const ok = (list || []).filter(Boolean);
+      if (ok.length) decoded.set(key, ok);
+    });
 }
 
 function shuffled(list) {
@@ -114,7 +171,7 @@ export function createVoiceFiller() {
 
   const ready = (lang) => {
     const ctx = voiceContext();
-    return contextAlwaysAudible() && !!decoded.get(lang)?.length && !!ctx && ctx.state === "running";
+    return contextAlwaysAudible() && !!decoded.get(keyFor(lang))?.length && !!ctx && ctx.state === "running";
   };
 
   return {
@@ -126,7 +183,7 @@ export function createVoiceFiller() {
       if (!ready(lang)) return false;
       if (cur) finish(cur);
       const ctx = voiceContext();
-      const buffer = pick(decoded.get(lang));
+      const buffer = pick(decoded.get(keyFor(lang)));
       const f = { over: false, timer: null, source: null, gain: null, resolve: null, done: null };
       f.done = new Promise((resolve) => { f.resolve = resolve; });
       try {

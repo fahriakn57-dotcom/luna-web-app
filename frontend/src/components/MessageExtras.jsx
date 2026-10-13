@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
-import { Download, FileText, Globe, ImageOff, Loader2, Maximize2 } from "lucide-react";
-import { fetchMessageFile } from "../lib/api";
+import {
+  Bell, BellOff, Brain, CalendarPlus, Download, FileText, Globe, ImageOff, Loader2, Maximize2, SlidersHorizontal,
+  StickyNote, Target, Trash2, Trophy,
+} from "lucide-react";
+import { fetchMessageFile, fetchReminderIcs, setReplyLang } from "../lib/api";
+import { applyActions, formatDue, normalizeActions } from "../lib/agentActions";
 
 // What comes with one of Luna's replies besides its text (components/
 // ChatMessage.jsx):
@@ -10,6 +14,10 @@ import { fetchMessageFile } from "../lib/api";
 //   lib/api.js normalizeAttachments) — pictures inline (tap to open), files
 //   as download cards. Bytes that came inline are used as they are; others
 //   are fetched from GET /api/messages/{id}/file with the device's auth.
+// - ActionCards: what Luna did in the account that turn (`actions`, backend
+//   services/agent_tools.py; lib/agentActions.js) — a reminder card with
+//   "Takvime ekle" (Google Calendar) and ".ics indir", a note, a goal, a
+//   memory, a reply preference.
 
 const UI = {
   tr: {
@@ -19,6 +27,19 @@ const UI = {
     retry: "Tekrar dene",
     download: "İndir",
     downloadFailed: "İndirilemedi, tekrar dene.",
+    reminder_created: "Hatırlatıcı kuruldu",
+    reminder_cancelled: "Hatırlatıcı silindi",
+    note_created: "Not kaydedildi",
+    goal_added: "Hedef eklendi",
+    goal_completed: "Hedef tamamlandı",
+    memory_saved: "Hafızaya eklendi",
+    memory_forgotten: "Hafızadan silindi",
+    preference_set: "Tercih güncellendi",
+    addToCalendar: "Takvime ekle",
+    downloadIcs: ".ics indir",
+    daily: "her gün",
+    weekly: "her hafta",
+    monthly: "her ay",
   },
   en: {
     sources: "Sources",
@@ -27,9 +48,23 @@ const UI = {
     retry: "Try again",
     download: "Download",
     downloadFailed: "Couldn't download it — try again.",
+    reminder_created: "Reminder set",
+    reminder_cancelled: "Reminder deleted",
+    note_created: "Note saved",
+    goal_added: "Goal added",
+    goal_completed: "Goal completed",
+    memory_saved: "Saved to memory",
+    memory_forgotten: "Removed from memory",
+    preference_set: "Preference updated",
+    addToCalendar: "Add to calendar",
+    downloadIcs: "Download .ics",
+    daily: "every day",
+    weekly: "every week",
+    monthly: "every month",
   },
 };
-const uiFor = (lang) => UI[lang === "en" ? "en" : "tr"];
+// Turkish only for Turkish; every other language reads English (lib/i18n.js uiLang).
+const uiFor = (lang) => UI[lang === "tr" ? "tr" : "en"];
 
 export function SourceChips({ sources, lang = "tr" }) {
   if (!Array.isArray(sources) || !sources.length) return null;
@@ -189,3 +224,105 @@ export function AttachmentList({ attachments, lang = "tr", onOpenImage }) {
     </div>
   );
 }
+
+// ---- What Luna did in the account (agent actions) ----
+
+const ACTION_ICONS = {
+  reminder_created: Bell,
+  reminder_cancelled: BellOff,
+  note_created: StickyNote,
+  goal_added: Target,
+  goal_completed: Trophy,
+  memory_saved: Brain,
+  memory_forgotten: Trash2,
+  preference_set: SlidersHorizontal,
+};
+
+const chipClass = "inline-flex items-center gap-1.5 rounded-full border border-purple-400/30 bg-purple-400/10 px-2.5 py-1 "
+  + "text-[11px] text-purple-100 transition-colors hover:bg-purple-400/20 hover:text-white disabled:opacity-60";
+
+// A reminder's "Takvime ekle": Google Calendar's own add-event page (the user
+// saves it there — no account link, no permission) and the .ics file every
+// calendar app imports (fetched with the device's auth, then saved).
+function CalendarButtons({ action, ui }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const onIcs = async () => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      saveBlob(await fetchReminderIcs(action.icsId), "luna-reminder.ics");
+    } catch (_) {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap gap-1.5">
+        {action.googleUrl && (
+          <a href={action.googleUrl} target="_blank" rel="noopener noreferrer nofollow" className={chipClass}
+            data-testid="chat-action-google-calendar">
+            <CalendarPlus size={12} className="shrink-0 text-purple-300" />
+            {ui.addToCalendar}
+          </a>
+        )}
+        {action.icsId && (
+          <button type="button" onClick={onIcs} disabled={busy} className={chipClass} data-testid="chat-action-ics">
+            {busy ? <Loader2 size={12} className="shrink-0 animate-spin text-purple-300" />
+              : <Download size={12} className="shrink-0 text-purple-300" />}
+            {ui.downloadIcs}
+          </button>
+        )}
+      </div>
+      {failed && <p className="mt-1 text-[11px] text-red-300/90" role="alert">{ui.downloadFailed}</p>}
+    </div>
+  );
+}
+
+function ActionCard({ action, ui, lang }) {
+  const Icon = ACTION_ICONS[action.type] || Bell;
+  const reminder = action.type === "reminder_created";
+  const title = (reminder || action.type === "reminder_cancelled") && action.text ? action.text : action.summary;
+  const when = reminder ? formatDue(action, lang) : "";
+  const repeat = reminder && ui[action.recurrence] ? ui[action.recurrence] : "";
+  return (
+    <div className="rounded-xl border border-purple-400/25 bg-black/20 px-3.5 py-2.5" data-testid="chat-action-card"
+      data-action-type={action.type}>
+      <div className="flex items-start gap-2.5">
+        <Icon size={16} className="mt-0.5 shrink-0 text-purple-300" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-purple-300/70">{ui[action.type]}</p>
+          <p className="break-words text-xs font-medium text-purple-100">{title}</p>
+          {(when || repeat) && (
+            <p className="text-[11px] text-purple-200/70" data-testid="chat-action-when">
+              {[when, repeat].filter(Boolean).join(" · ")}
+            </p>
+          )}
+        </div>
+      </div>
+      {reminder && (action.googleUrl || action.icsId) && <CalendarButtons action={action} ui={ui} />}
+    </div>
+  );
+}
+
+export function ActionCards({ actions, lang = "tr" }) {
+  const list = normalizeActions(actions);
+  // A fresh action (one this turn just did) also updates this device once:
+  // the reminder alerts and a reply language Luna saved (lib/agentActions.js).
+  useEffect(() => {
+    applyActions(actions, { setReplyLang });
+  }, [actions]);
+  if (!list.length) return null;
+  const ui = uiFor(lang);
+  return (
+    <div className="mt-2.5 space-y-2" data-testid="chat-actions">
+      {list.map((a, i) => <ActionCard key={`${a.type}-${a.id}-${i}`} action={a} ui={ui} lang={lang} />)}
+    </div>
+  );
+}
+
+// (the same component under the name a caller may use for a list)
+export const ActionList = ActionCards;
